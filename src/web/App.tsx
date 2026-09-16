@@ -223,6 +223,7 @@ export function App() {
           <p className="eyebrow">LOCAL AUDIO LAB · 01</p>
           <h1>Tunestretch</h1>
         </div>
+        <div className="hero-mark" aria-hidden="true"><span>∿</span><span>∿</span><span>∿</span></div>
       </header>
 
       <section className="import-card panel">

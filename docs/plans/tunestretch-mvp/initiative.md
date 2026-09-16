@@ -42,6 +42,6 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Web source copy and file picker explicitly communicate MP3/WAV local support.
 - Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
 - Refinement bead: `tunestretch-l3y`.
-- UI is dark-only; nonessential hero/source/footer marketing copy was removed.
+- UI uses the first Swiss light layout; nonessential hero/source/footer marketing copy remains removed.
 - Stop playback is available in the source, shape, layers, and sequence panels and updates the live status.
 - Layer, preview, and sequence rendering errors now surface in the live status instead of leaving the UI unresolved.
