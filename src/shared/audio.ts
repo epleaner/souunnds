@@ -34,6 +34,7 @@ export interface SequenceStep {
   targetType: "layer" | "sequencer";
   repeats: number;
   gapSeconds: number;
+  length: number;
 }
 
 export interface Sequencer {
@@ -319,9 +320,10 @@ export function scheduleSequencer(
     for (const step of sequencer.steps) {
       const repeats = Math.max(1, Math.floor(step.repeats));
       for (let repeat = 0; repeat < repeats; repeat += 1) {
-        const duration = step.targetType === "layer"
+        const baseDuration = step.targetType === "layer"
           ? layerDurations[step.targetId] ?? (layers.get(step.targetId)?.params.stretch ?? 1)
           : schedule(step.targetId, cursor);
+        const duration = baseDuration * positive(step.length, 1);
         if (step.targetType === "layer" && layers.has(step.targetId)) {
           scheduled.push({ layerId: step.targetId, startSeconds: cursor });
         }

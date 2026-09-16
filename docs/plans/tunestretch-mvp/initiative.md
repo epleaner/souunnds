@@ -43,5 +43,8 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
 - Refinement bead: `tunestretch-l3y`.
 - UI uses the first Swiss light layout; nonessential hero/source/footer marketing copy remains removed.
-- Stop playback is available in the source, shape, layers, and sequence panels and updates the live status.
+- Stop playback is available in the source, layers, and sequence panels and updates the live status.
 - Layer, preview, and sequence rendering errors now surface in the live status instead of leaving the UI unresolved.
+- Sequence-grid change bead: `tunestretch-6hl`.
+- The browser workspace now has two coordinated regions: Layers and Sequence.
+- Sequence cells are ordered one-dimensional controls; cell width and playback timing use each cell's positive relative `length`, with a selected-cell inspector for layer assignment and tuning.

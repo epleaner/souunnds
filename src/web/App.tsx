@@ -9,9 +9,10 @@ import {
   type PcmAudio,
   type SequenceStep,
   type Sequencer,
-  type StretchParams,
 } from "../shared/audio";
 import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
+
+const MAIN_SEQUENCE_ID = "main-sequencer";
 
 function formatSeconds(seconds: number): string {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -30,6 +31,10 @@ function createLayer(duration: number, index: number): Layer {
     gain: 0.8,
     muted: false,
   };
+}
+
+function createSequenceStep(targetId: string, length = 1): SequenceStep {
+  return { targetId, targetType: "layer", repeats: 1, gapSeconds: 0, length };
 }
 
 function pcmFromAudioBuffer(buffer: AudioBuffer): PcmAudio {
@@ -57,13 +62,11 @@ export function App() {
   const [source, setSource] = useState<PcmAudio | null>(null);
   const [fileName, setFileName] = useState("");
   const [duration, setDuration] = useState(0);
-  const [segment, setSegment] = useState({ start: 0, end: 4 });
-  const [params, setParams] = useState<StretchParams>({ ...DEFAULT_PARAMS });
   const [layers, setLayers] = useState<Layer[]>([]);
   const [sequencers, setSequencers] = useState<Sequencer[]>([
-    { id: "main-sequencer", name: "Main sequence", steps: [] },
+    { id: MAIN_SEQUENCE_ID, name: "Main sequence", steps: [] },
   ]);
-  const [activeSequencerId, setActiveSequencerId] = useState("main-sequencer");
+  const [selectedCellIndex, setSelectedCellIndex] = useState(0);
   const [generatedCount, setGeneratedCount] = useState(4);
   const [generatedSeed, setGeneratedSeed] = useState(23);
   const [generatedLinked, setGeneratedLinked] = useState(true);
@@ -73,7 +76,9 @@ export function App() {
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
 
   const arrangement = useMemo<Arrangement>(() => ({ layers, sequencers }), [layers, sequencers]);
-  const activeSequencer = sequencers.find((sequencer) => sequencer.id === activeSequencerId) ?? sequencers[0];
+  const activeSequencer = sequencers[0];
+  const selectedCell = activeSequencer?.steps[selectedCellIndex];
+  const layerNames = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.name])), [layers]);
 
   function ensureContext(): AudioContext {
     if (!contextRef.current) contextRef.current = new AudioContext();
@@ -114,26 +119,30 @@ export function App() {
       const decoded = await context.decodeAudioData(await file.arrayBuffer());
       const pcm = pcmFromAudioBuffer(decoded);
       const nextDuration = decoded.duration;
+      const initialLayer = createLayer(nextDuration, 0);
       setSource(pcm);
       setFileName(file.name);
       setDuration(nextDuration);
-      setSegment({ start: 0, end: Math.min(4, nextDuration) });
-      setLayers([createLayer(nextDuration, 0)]);
-      setSequencers([{ id: "main-sequencer", name: "Main sequence", steps: [] }]);
-      setActiveSequencerId("main-sequencer");
+      setLayers([initialLayer]);
+      setSequencers([{
+        id: MAIN_SEQUENCE_ID,
+        name: "Main sequence",
+        steps: Array.from({ length: 4 }, () => createSequenceStep(initialLayer.id)),
+      }]);
+      setSelectedCellIndex(0);
       setStatus(`${file.name} ready · ${formatSeconds(nextDuration)} · ${decoded.sampleRate.toLocaleString()} Hz`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load that file or the upstream WASM core.");
     }
   }
 
-  async function previewSelection(): Promise<void> {
+  async function previewLayer(layer: Layer): Promise<void> {
     if (!source) return setStatus("Import a file before previewing.");
-    setStatus("Rendering preview with upstream Paulstretch…");
+    setStatus(`Rendering ${layer.name} with upstream Paulstretch…`);
     try {
-      await playPcm(await stretchWithPaulstretch(source, segment, params), "selected segment");
+      await playPcm(await stretchWithPaulstretch(source, layer.segment, layer.params), layer.name);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Preview failed.");
+      setStatus(error instanceof Error ? error.message : "Layer preview failed.");
     }
   }
 
@@ -149,25 +158,20 @@ export function App() {
   }
 
   async function previewSequence(): Promise<void> {
-    if (!source || !activeSequencer) return setStatus("Add a sequence step first.");
-    if (!activeSequencer.steps.length) return setStatus("Add a layer or nested sequence to the sequencer first.");
+    if (!source || !activeSequencer?.steps.length) return setStatus("Add a sequence cell first.");
     setStatus("Rendering sequence with upstream Paulstretch…");
     try {
-      await playPcm(await renderSequencerAsync(source, arrangement, activeSequencer.id, stretchWithPaulstretch), activeSequencer.name);
+      await playPcm(await renderSequencerAsync(source, arrangement, MAIN_SEQUENCE_ID, stretchWithPaulstretch), activeSequencer.name);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     }
-  }
-
-  function updateParams(patch: Partial<StretchParams>): void {
-    setParams((current) => ({ ...current, ...patch }));
   }
 
   function updateLayer(id: string, patch: Partial<Layer>): void {
     setLayers((current) => current.map((layer) => (layer.id === id ? { ...layer, ...patch } : layer)));
   }
 
-  function updateLayerParams(id: string, patch: Partial<StretchParams>): void {
+  function updateLayerParams(id: string, patch: Partial<Layer["params"]>): void {
     setLayers((current) => current.map((layer) => (
       layer.id === id ? { ...layer, params: { ...layer.params, ...patch } } : layer
     )));
@@ -178,6 +182,18 @@ export function App() {
     setLayers((current) => [...current, createLayer(duration, current.length)]);
   }
 
+  function removeLayer(id: string): void {
+    const remaining = layers.filter((layer) => layer.id !== id);
+    setLayers(remaining);
+    setSequencers((sequences) => sequences.map((sequence) => ({
+      ...sequence,
+      steps: remaining.length
+        ? sequence.steps.map((step) => step.targetId === id ? { ...step, targetId: remaining[0].id } : step)
+        : [],
+    })));
+    setSelectedCellIndex(0);
+  }
+
   function generateLayers(): void {
     if (!source) return setStatus("Import a file before generating layers.");
     const generated = generateArrangement(duration, {
@@ -186,34 +202,41 @@ export function App() {
       linked: generatedLinked,
     });
     setLayers(generated.layers);
+    setSequencers((current) => current.map((sequence) => ({
+      ...sequence,
+      steps: sequence.steps.length
+        ? sequence.steps.map((step) => ({ ...step, targetId: generated.layers[0].id }))
+        : Array.from({ length: 4 }, () => createSequenceStep(generated.layers[0].id)),
+    })));
+    setSelectedCellIndex(0);
     setStatus(`Generated ${generated.layers.length} ${generatedLinked ? "linked" : "independent"} layers.`);
   }
 
-  function updateSequencer(id: string, patch: Partial<Sequencer>): void {
-    setSequencers((current) => current.map((sequencer) => (
-      sequencer.id === id ? { ...sequencer, ...patch } : sequencer
+  function updateSequence(patch: Partial<Sequencer>): void {
+    setSequencers((current) => current.map((sequence) => (
+      sequence.id === MAIN_SEQUENCE_ID ? { ...sequence, ...patch } : sequence
     )));
   }
 
-  function addStep(targetType: SequenceStep["targetType"]): void {
-    if (!activeSequencer) return;
-    const targetId = targetType === "layer" ? layers[0]?.id : sequencers.find((item) => item.id !== activeSequencer.id)?.id;
-    if (!targetId) return setStatus(`Add a ${targetType === "layer" ? "layer" : "second sequencer"} first.`);
-    const step: SequenceStep = { targetId, targetType, repeats: 1, gapSeconds: 0 };
-    updateSequencer(activeSequencer.id, { steps: [...activeSequencer.steps, step] });
+  function setCellCount(value: number): void {
+    if (!layers.length) return setStatus("Add a layer before creating sequence cells.");
+    const count = Math.max(1, Math.min(64, Math.floor(Number.isFinite(value) ? value : 1)));
+    const fallbackLayerId = layers[0].id;
+    updateSequence({ steps: Array.from({ length: count }, (_, index) => activeSequencer?.steps[index] ?? createSequenceStep(fallbackLayerId)) });
+    setSelectedCellIndex((current) => Math.min(current, count - 1));
   }
 
   function updateStep(index: number, patch: Partial<SequenceStep>): void {
     if (!activeSequencer) return;
-    updateSequencer(activeSequencer.id, {
+    updateSequence({
       steps: activeSequencer.steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)),
     });
   }
 
-  function addSequencer(): void {
-    const nextId = `sequencer-${sequencers.length + 1}`;
-    setSequencers((current) => [...current, { id: nextId, name: `Sequence ${current.length + 1}`, steps: [] }]);
-    setActiveSequencerId(nextId);
+  function removeCell(index: number): void {
+    if (!activeSequencer || activeSequencer.steps.length <= 1) return;
+    updateSequence({ steps: activeSequencer.steps.filter((_, stepIndex) => stepIndex !== index) });
+    setSelectedCellIndex((current) => Math.min(current, activeSequencer.steps.length - 2));
   }
 
   return (
@@ -241,25 +264,12 @@ export function App() {
         <div className="status" role="status" aria-live="polite">{status}</div>
       </section>
 
-      <div className="workspace">
-        <section className="panel controls-panel">
-          <div className="panel-heading"><div><p className="section-kicker">01 · Shape</p><h2>Stretch a segment</h2></div><div className="panel-actions"><span className="pill">{formatSeconds(duration)}</span><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
-          <div className="range-grid">
-            <label>Start <input type="number" min="0" max={duration} step="0.01" value={segment.start} onChange={(event) => setSegment({ ...segment, start: Number(event.target.value) })} /></label>
-            <label>End <input type="number" min="0.01" max={duration} step="0.01" value={segment.end} onChange={(event) => setSegment({ ...segment, end: Number(event.target.value) })} /></label>
+      <div className="studio">
+        <section className="panel layers-panel">
+          <div className="panel-heading">
+            <div><p className="section-kicker">01 · Layers</p><h2>Layers</h2></div>
+            <div className="panel-actions"><button className="quiet-button" onClick={addLayer} disabled={!source}>+ Layer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div>
           </div>
-          <label className="range-label">Stretch <output>{params.stretch.toFixed(1)}×</output><input type="range" min="1" max="40" step="0.5" value={params.stretch} onChange={(event) => updateParams({ stretch: Number(event.target.value) })} /></label>
-          <div className="range-grid">
-            <label>Loops <input type="number" min="1" max="32" step="1" value={params.loops} onChange={(event) => updateParams({ loops: Number(event.target.value) })} /></label>
-            <label>Seed <input type="number" min="1" step="1" value={params.seed} onChange={(event) => updateParams({ seed: Number(event.target.value) })} /></label>
-          </div>
-          <label className="range-label">Grain window <output>{params.windowSeconds.toFixed(2)}s</output><input type="range" min="0.05" max="1" step="0.01" value={params.windowSeconds} onChange={(event) => updateParams({ windowSeconds: Number(event.target.value) })} /></label>
-          <label className="range-label">Onset sensitivity <output>{Math.round(params.onset * 100)}%</output><input type="range" min="0" max="1" step="0.01" value={params.onset} onChange={(event) => updateParams({ onset: Number(event.target.value) })} /></label>
-          <button className="primary-button" onClick={() => void previewSelection()} disabled={!source}>{playing ? "Preview / restart" : "Preview segment"}</button>
-        </section>
-
-        <section className="panel arrangement-panel">
-          <div className="panel-heading"><div><p className="section-kicker">02 · Arrange</p><h2>Layers</h2></div><div className="panel-actions"><button className="quiet-button" onClick={addLayer} disabled={!source}>+ Layer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
           <div className="generator-row">
             <div><strong>Generate layers</strong></div>
             <label>Count <input type="number" min="1" max="12" value={generatedCount} onChange={(event) => setGeneratedCount(Number(event.target.value))} /></label>
@@ -268,10 +278,10 @@ export function App() {
             <button className="quiet-button" onClick={generateLayers} disabled={!source}>Generate</button>
           </div>
           <div className="layer-list">
-            {!layers.length && <div className="empty-state">Import a file, then add a layer or generate an arrangement.</div>}
+            {!layers.length && <div className="empty-state">Import a file, then add a layer.</div>}
             {layers.map((layer, index) => (
               <article className={`layer-card ${layer.muted ? "is-muted" : ""}`} key={layer.id}>
-                <div className="layer-title"><span className="layer-index">{String(index + 1).padStart(2, "0")}</span><input aria-label="Layer name" value={layer.name} onChange={(event) => updateLayer(layer.id, { name: event.target.value })} /><label className="toggle"><input type="checkbox" checked={!layer.muted} onChange={(event) => updateLayer(layer.id, { muted: !event.target.checked })} /> On</label><button className="icon-button" aria-label={`Remove ${layer.name}`} onClick={() => setLayers((current) => current.filter((item) => item.id !== layer.id))}>×</button></div>
+                <div className="layer-title"><span className="layer-index">{String(index + 1).padStart(2, "0")}</span><input aria-label="Layer name" value={layer.name} onChange={(event) => updateLayer(layer.id, { name: event.target.value })} /><label className="toggle"><input type="checkbox" checked={!layer.muted} onChange={(event) => updateLayer(layer.id, { muted: !event.target.checked })} /> On</label><button className="icon-button" aria-label={`Remove ${layer.name}`} onClick={() => removeLayer(layer.id)}>×</button></div>
                 <div className="layer-fields">
                   <label>Start <input type="number" min="0" max={duration} step="0.01" value={layer.segment.start} onChange={(event) => updateLayer(layer.id, { segment: { ...layer.segment, start: Number(event.target.value) } })} /></label>
                   <label>End <input type="number" min="0.01" max={duration} step="0.01" value={layer.segment.end} onChange={(event) => updateLayer(layer.id, { segment: { ...layer.segment, end: Number(event.target.value) } })} /></label>
@@ -280,24 +290,51 @@ export function App() {
                   <label>Offset <input type="number" min="0" step="0.1" value={layer.offsetSeconds} onChange={(event) => updateLayer(layer.id, { offsetSeconds: Number(event.target.value) })} /></label>
                   <label>Gain <input type="number" min="0" max="2" step="0.05" value={layer.gain} onChange={(event) => updateLayer(layer.id, { gain: Number(event.target.value) })} /></label>
                 </div>
+                <button className="quiet-button layer-preview" onClick={() => void previewLayer(layer)} disabled={!source}>Preview layer</button>
               </article>
             ))}
           </div>
           <button className="primary-button" onClick={() => void previewArrangement()} disabled={!source || !layers.length}>Play layers together</button>
         </section>
+
+        <section className="panel sequence-panel">
+          <div className="panel-heading">
+            <div><p className="section-kicker">02 · Sequence</p><h2>Sequence</h2></div>
+            <div className="panel-actions"><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div>
+          </div>
+          <div className="sequence-toolbar">
+            <label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label>
+            <label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label>
+          </div>
+          <div className="sequence-grid" aria-label="Sequence cells">
+            {!activeSequencer?.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
+            {activeSequencer?.steps.map((step, index) => (
+              <button
+                className={`sequence-cell ${index === selectedCellIndex ? "is-selected" : ""}`}
+                key={`${activeSequencer.id}-cell-${index}`}
+                style={{ flex: `${Math.max(0.25, step.length)} 1 0` }}
+                onClick={() => setSelectedCellIndex(index)}
+                aria-label={`Cell ${index + 1}, ${layerNames.get(step.targetId) ?? "Unassigned"}`}
+                aria-pressed={index === selectedCellIndex}
+              >
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <strong>{layerNames.get(step.targetId) ?? "Unassigned"}</strong>
+              </button>
+            ))}
+          </div>
+          {selectedCell ? (
+            <div className="cell-inspector">
+              <div className="cell-inspector-heading"><strong>Cell {String(selectedCellIndex + 1).padStart(2, "0")}</strong><button className="icon-button" onClick={() => removeCell(selectedCellIndex)} disabled={activeSequencer.steps.length <= 1} aria-label="Remove selected cell">×</button></div>
+              <div className="cell-fields">
+                <label>Layer <select value={selectedCell.targetId} onChange={(event) => updateStep(selectedCellIndex, { targetId: event.target.value })}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select></label>
+                <label>Relative length <input type="number" min="0.25" max="16" step="0.25" value={selectedCell.length} onChange={(event) => updateStep(selectedCellIndex, { length: Math.max(0.25, Number(event.target.value)) })} /></label>
+                <label>Repeats <input type="number" min="1" max="32" step="1" value={selectedCell.repeats} onChange={(event) => updateStep(selectedCellIndex, { repeats: Number(event.target.value) })} /></label>
+                <label>Gap <input type="number" min="0" step="0.1" value={selectedCell.gapSeconds} onChange={(event) => updateStep(selectedCellIndex, { gapSeconds: Number(event.target.value) })} /></label>
+              </div>
+            </div>
+          ) : null}
+        </section>
       </div>
-
-      <section className="panel sequencer-panel">
-        <div className="panel-heading"><div><p className="section-kicker">03 · Sequence</p><h2>Sequence</h2></div><div className="panel-actions"><button className="quiet-button" onClick={addSequencer}>+ Sequencer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
-        <div className="sequencer-toolbar"><label>Editing <select value={activeSequencerId} onChange={(event) => setActiveSequencerId(event.target.value)}>{sequencers.map((sequencer) => <option key={sequencer.id} value={sequencer.id}>{sequencer.name}</option>)}</select></label><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => activeSequencer && updateSequencer(activeSequencer.id, { name: event.target.value })} /></label><button className="quiet-button" onClick={() => addStep("layer")} disabled={!layers.length}>+ Layer step</button><button className="quiet-button" onClick={() => addStep("sequencer")} disabled={sequencers.length < 2}>+ Nested step</button><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button></div>
-        <div className="sequence-list">
-          {!activeSequencer?.steps.length && <div className="empty-state">Sequence steps can target layers or other sequencers, with repeats and gaps.</div>}
-          {activeSequencer?.steps.map((step, index) => (
-            <div className="sequence-step" key={`${activeSequencer.id}-${index}`}><span className="step-number">{index + 1}</span><select value={step.targetId} onChange={(event) => updateStep(index, { targetId: event.target.value })}>{(step.targetType === "layer" ? layers : sequencers.filter((sequencer) => sequencer.id !== activeSequencer.id)).map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}</select><label>Repeats <input type="number" min="1" max="32" value={step.repeats} onChange={(event) => updateStep(index, { repeats: Number(event.target.value) })} /></label><label>Gap <input type="number" min="0" step="0.1" value={step.gapSeconds} onChange={(event) => updateStep(index, { gapSeconds: Number(event.target.value) })} /></label><button className="icon-button" aria-label="Remove sequence step" onClick={() => updateSequencer(activeSequencer.id, { steps: activeSequencer.steps.filter((_, stepIndex) => stepIndex !== index) })}>×</button></div>
-          ))}
-        </div>
-      </section>
-
     </main>
   );
 }

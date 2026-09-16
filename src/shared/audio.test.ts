@@ -65,13 +65,35 @@ describe("audio core", () => {
         { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
-        { id: "child", name: "Child", steps: [{ targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0.5 }] },
-        { id: "main", name: "Main", steps: [{ targetId: "child", targetType: "sequencer", repeats: 2, gapSeconds: 1 }] },
+        { id: "child", name: "Child", steps: [{ targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0.5, length: 1 }] },
+        { id: "main", name: "Main", steps: [{ targetId: "child", targetType: "sequencer", repeats: 2, gapSeconds: 1, length: 1 }] },
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
       { layerId: "layer", startSeconds: 0 },
       { layerId: "layer", startSeconds: 2.5 },
+    ]);
+  });
+
+  it("scales sequence cell timing by relative length", () => {
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        {
+          id: "main",
+          name: "Main",
+          steps: [
+            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 0.5 },
+            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 2 },
+          ],
+        },
+      ],
+    };
+    expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
+      { layerId: "layer", startSeconds: 0 },
+      { layerId: "layer", startSeconds: 0.5 },
     ]);
   });
 });
