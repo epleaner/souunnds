@@ -2,9 +2,8 @@ import { useMemo, useRef, useState } from "react";
 import {
   DEFAULT_PARAMS,
   generateArrangement,
-  renderArrangement,
-  renderSequencer,
-  stretchPcm,
+  renderArrangementAsync,
+  renderSequencerAsync,
   type Arrangement,
   type Layer,
   type PcmAudio,
@@ -12,6 +11,7 @@ import {
   type Sequencer,
   type StretchParams,
 } from "../shared/audio";
+import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
 
 function formatSeconds(seconds: number): string {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -108,6 +108,8 @@ export function App() {
   async function importFile(file: File): Promise<void> {
     try {
       const context = ensureContext();
+      setStatus("Loading upstream Paulstretch WASM…");
+      await loadPaulstretchModule();
       const decoded = await context.decodeAudioData(await file.arrayBuffer());
       const pcm = pcmFromAudioBuffer(decoded);
       const nextDuration = decoded.duration;
@@ -120,28 +122,28 @@ export function App() {
       setActiveSequencerId("main-sequencer");
       setStatus(`${file.name} ready · ${formatSeconds(nextDuration)} · ${decoded.sampleRate.toLocaleString()} Hz`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not decode that file.");
+      setStatus(error instanceof Error ? error.message : "Could not load that file or the upstream WASM core.");
     }
   }
 
   async function previewSelection(): Promise<void> {
     if (!source) return setStatus("Import a file before previewing.");
-    setStatus("Rendering preview…");
-    await playPcm(stretchPcm(source, segment, params), "selected segment");
+    setStatus("Rendering preview with upstream Paulstretch…");
+    await playPcm(await stretchWithPaulstretch(source, segment, params), "selected segment");
   }
 
   async function previewArrangement(): Promise<void> {
     if (!source) return setStatus("Import a file before playing layers.");
     if (!layers.length) return setStatus("Add at least one layer first.");
-    setStatus("Rendering layers…");
-    await playPcm(renderArrangement(source, arrangement), `${layers.length} layers`);
+    setStatus("Rendering layers with upstream Paulstretch…");
+    await playPcm(await renderArrangementAsync(source, arrangement, stretchWithPaulstretch), `${layers.length} layers`);
   }
 
   async function previewSequence(): Promise<void> {
     if (!source || !activeSequencer) return setStatus("Add a sequence step first.");
     if (!activeSequencer.steps.length) return setStatus("Add a layer or nested sequence to the sequencer first.");
-    setStatus("Rendering sequence…");
-    await playPcm(renderSequencer(source, arrangement, activeSequencer.id), activeSequencer.name);
+    setStatus("Rendering sequence with upstream Paulstretch…");
+    await playPcm(await renderSequencerAsync(source, arrangement, activeSequencer.id, stretchWithPaulstretch), activeSequencer.name);
   }
 
   function updateParams(patch: Partial<StretchParams>): void {
@@ -238,7 +240,7 @@ export function App() {
             <label>Seed <input type="number" min="1" step="1" value={params.seed} onChange={(event) => updateParams({ seed: Number(event.target.value) })} /></label>
           </div>
           <label className="range-label">Grain window <output>{params.windowSeconds.toFixed(2)}s</output><input type="range" min="0.05" max="1" step="0.01" value={params.windowSeconds} onChange={(event) => updateParams({ windowSeconds: Number(event.target.value) })} /></label>
-          <label className="range-label">Overlap <output>{Math.round(params.overlap * 100)}%</output><input type="range" min="0" max="0.95" step="0.01" value={params.overlap} onChange={(event) => updateParams({ overlap: Number(event.target.value) })} /></label>
+          <label className="range-label">Onset sensitivity <output>{Math.round(params.onset * 100)}%</output><input type="range" min="0" max="1" step="0.01" value={params.onset} onChange={(event) => updateParams({ onset: Number(event.target.value) })} /></label>
           <button className="primary-button" onClick={() => void previewSelection()} disabled={!source}>{playing ? "Preview / restart" : "Preview segment"}</button>
         </section>
 

@@ -9,6 +9,7 @@ export interface StretchParams {
   stretch: number;
   windowSeconds: number;
   overlap: number;
+  onset: number;
   loops: number;
   seed: number;
 }
@@ -45,6 +46,8 @@ export interface Arrangement {
   layers: Layer[];
   sequencers: Sequencer[];
 }
+export type StretchFunction = (audio: PcmAudio, segment: Segment, params: StretchParams) => PcmAudio;
+export type AsyncStretchFunction = (audio: PcmAudio, segment: Segment, params: StretchParams) => Promise<PcmAudio>;
 
 export interface ScheduledLayer {
   layerId: string;
@@ -55,6 +58,7 @@ export const DEFAULT_PARAMS: StretchParams = {
   stretch: 8,
   windowSeconds: 0.25,
   overlap: 0.75,
+  onset: 0,
   loops: 1,
   seed: 11,
 };
@@ -236,11 +240,10 @@ export function stretchPcm(audio: PcmAudio, segment: Segment, params: StretchPar
   return { sampleRate: audio.sampleRate, channels: audio.channels, samples: output };
 }
 
-export function renderArrangement(audio: PcmAudio, arrangement: Arrangement): PcmAudio {
-  const rendered = arrangement.layers.map((layer) => ({
-    layer,
-    audio: stretchPcm(audio, layer.segment, layer.params),
-  }));
+function mixArrangementLayers(
+  audio: PcmAudio,
+  rendered: Array<{ layer: Layer; audio: PcmAudio }>,
+): PcmAudio {
   const totalFrames = rendered.reduce((longest, item) => {
     if (item.layer.muted) return longest;
     return Math.max(longest, Math.floor(item.layer.offsetSeconds * audio.sampleRate) + frameCount(item.audio));
@@ -267,6 +270,29 @@ export function renderArrangement(audio: PcmAudio, arrangement: Arrangement): Pc
     for (let index = 0; index < output.length; index += 1) output[index] *= scale;
   }
   return { sampleRate: audio.sampleRate, channels: audio.channels, samples: output };
+}
+
+export function renderArrangement(
+  audio: PcmAudio,
+  arrangement: Arrangement,
+  stretch: StretchFunction = stretchPcm,
+): PcmAudio {
+  return mixArrangementLayers(audio, arrangement.layers.map((layer) => ({
+    layer,
+    audio: stretch(audio, layer.segment, layer.params),
+  })));
+}
+
+export async function renderArrangementAsync(
+  audio: PcmAudio,
+  arrangement: Arrangement,
+  stretch: AsyncStretchFunction,
+): Promise<PcmAudio> {
+  const rendered = await Promise.all(arrangement.layers.map(async (layer) => ({
+    layer,
+    audio: await stretch(audio, layer.segment, layer.params),
+  })));
+  return mixArrangementLayers(audio, rendered);
 }
 
 function layerDuration(layer: Layer, sourceSampleRate: number, sourceFrames: number): number {
@@ -310,19 +336,13 @@ export function scheduleSequencer(
   return scheduled;
 }
 
-export function renderSequencer(
+function mixScheduledLayers(
   audio: PcmAudio,
   arrangement: Arrangement,
-  sequencerId: string,
+  schedule: ScheduledLayer[],
+  rendered: Map<string, PcmAudio>,
 ): PcmAudio {
-  const layerDurations = Object.fromEntries(
-    arrangement.layers.map((layer) => [layer.id, layerDuration(layer, audio.sampleRate, frameCount(audio))]),
-  );
-  const schedule = scheduleSequencer(arrangement, sequencerId, layerDurations);
   const layerMap = new Map(arrangement.layers.map((layer) => [layer.id, layer]));
-  const rendered = new Map(
-    arrangement.layers.map((layer) => [layer.id, stretchPcm(audio, layer.segment, layer.params)]),
-  );
   const totalFrames = schedule.reduce((longest, item) => {
     const clip = rendered.get(item.layerId);
     return clip
@@ -353,6 +373,46 @@ export function renderSequencer(
   return { sampleRate: audio.sampleRate, channels: audio.channels, samples: output };
 }
 
+function sequenceSchedule(
+  audio: PcmAudio,
+  arrangement: Arrangement,
+  sequencerId: string,
+): ScheduledLayer[] {
+  const layerDurations = Object.fromEntries(
+    arrangement.layers.map((layer) => [layer.id, layerDuration(layer, audio.sampleRate, frameCount(audio))]),
+  );
+  return scheduleSequencer(arrangement, sequencerId, layerDurations);
+}
+
+export function renderSequencer(
+  audio: PcmAudio,
+  arrangement: Arrangement,
+  sequencerId: string,
+  stretch: StretchFunction = stretchPcm,
+): PcmAudio {
+  const schedule = sequenceSchedule(audio, arrangement, sequencerId);
+  const rendered = new Map(
+    arrangement.layers.map((layer) => [layer.id, stretch(audio, layer.segment, layer.params)]),
+  );
+  return mixScheduledLayers(audio, arrangement, schedule, rendered);
+}
+
+export async function renderSequencerAsync(
+  audio: PcmAudio,
+  arrangement: Arrangement,
+  sequencerId: string,
+  stretch: AsyncStretchFunction,
+): Promise<PcmAudio> {
+  const schedule = sequenceSchedule(audio, arrangement, sequencerId);
+  const rendered = new Map(
+    await Promise.all(arrangement.layers.map(async (layer) => [
+      layer.id,
+      await stretch(audio, layer.segment, layer.params),
+    ] as const)),
+  );
+  return mixScheduledLayers(audio, arrangement, schedule, rendered);
+}
+
 export function generateArrangement(
   durationSeconds: number,
   options: { count: number; seed: number; linked: boolean },
@@ -374,7 +434,7 @@ export function generateArrangement(
         stretch,
         loops: 1 + Math.floor(random() * 3),
         windowSeconds: 0.12 + random() * 0.5,
-        overlap: 0.55 + random() * 0.35,
+        onset: random() * 0.5,
         seed: Math.floor(random() * 100000),
       },
       offsetSeconds: random() * 3,

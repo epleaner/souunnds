@@ -1,0 +1,3 @@
+[submodule "vendor/libpaulstretch"]
+	path = vendor/libpaulstretch
+	url = https://github.com/olilarkin/libpaulstretch.git

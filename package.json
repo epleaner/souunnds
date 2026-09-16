@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:core": "node scripts/build-core.mjs",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "build:all": "npm run build:core && npm run build:wasm && npm run build",
     "check": "tsc --noEmit",
     "cli": "tsx src/cli.ts",
     "test": "vitest run"

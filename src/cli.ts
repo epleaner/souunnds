@@ -1,44 +1,88 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
-import {
-  DEFAULT_PARAMS,
-  decodeWav,
-  encodeWav,
-  stretchPcm,
-  type Segment,
-  type StretchParams,
-} from "./shared/audio.js";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { basename, extname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { decodeWav, encodeWav, type PcmAudio } from "./shared/audio.js";
 
-function numberOption(args: string[], name: string, fallback: number): number {
-  const index = args.indexOf(name);
-  if (index < 0) return fallback;
-  const value = Number(args[index + 1]);
-  if (!Number.isFinite(value)) throw new Error(`${name} expects a number.`);
+const ROOT = resolve(import.meta.dirname, "..");
+const PASSTHROUGH_OPTIONS: Record<string, true> = {
+  "--stretch": true, "--fft-size": true, "--window": true, "--onset": true, "--stretch-envelope": true,
+  "--pitch-shift": true, "--octave": true, "--frequency-shift": true, "--compressor": true, "--filter": true,
+  "--harmonics": true, "--spread": true, "--tonal-noise": true, "--arbitrary-filter": true, "--binaural": true,
+  "--binaural-mono": true, "--binaural-mode": true, "--binaural-envelope": true,
+};
+
+function printHelp(): void {
+  console.log(`tunestretch — upstream Paulstretch CLI wrapper
+
+Usage:
+  npm run build:core
+  npm run cli -- [upstream options] input.wav output.wav
+
+Segment options:
+  --start <seconds>     Crop the input segment before stretching (default: 0)
+  --end <seconds>       Crop endpoint (default: full file)
+  --loops <count>       Repeat the selected segment before stretching (default: 1)
+  --output <path>       Alternative to the positional output path
+
+Upstream options:
+  --stretch <ratio>     Stretch ratio (default: 8)
+  --fft-size <size>     FFT size (default: 4096)
+  --window <type>       rectangular|hamming|hann|blackman|blackman-harris
+  --onset <0-1>          Onset detection sensitivity
+  --help                 Show this help
+
+Additional upstream spectral and binaural options are passed through unchanged.
+`);
+}
+
+function requiredValue(args: string[], index: number, option: string): string {
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${option} requires a value.`);
   return value;
 }
 
-function option(args: string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  return index < 0 ? undefined : args[index + 1];
+function numberValue(value: string, option: string): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new Error(`${option} expects a number.`);
+  return number;
 }
 
-function printHelp(): void {
-  console.log(`tunestretch — Paulstretch-style local audio processor
+function cropAndLoop(audio: PcmAudio, start: number, end: number, loops: number): PcmAudio {
+  const startFrame = Math.floor(start * audio.sampleRate);
+  const endFrame = Math.ceil(end * audio.sampleRate);
+  const frameCount = Math.max(1, endFrame - startFrame);
+  const samples = new Float32Array(frameCount * loops * audio.channels);
+  const selected = audio.samples.subarray(
+    startFrame * audio.channels,
+    endFrame * audio.channels,
+  );
+  for (let loop = 0; loop < loops; loop += 1) {
+    samples.set(selected, loop * selected.length);
+  }
+  return { ...audio, samples };
+}
 
-Usage:
-  npm run cli -- input.wav [options]
+function nativeBinary(): string {
+  const configured = process.env.TUNESTRETCH_NATIVE;
+  const defaultName = process.platform === "win32" ? "paulstretch.exe" : "paulstretch";
+  const binary = configured ?? resolve(ROOT, "vendor/libpaulstretch/build-native", defaultName);
+  if (!existsSync(binary)) {
+    throw new Error(`Native Paulstretch renderer not found at ${binary}. Run npm run build:core first.`);
+  }
+  return binary;
+}
 
-Options:
-  --output <path>       Output WAV path (default: <input>-stretched.wav)
-  --start <seconds>     Segment start (default: 0)
-  --end <seconds>       Segment end (default: full file)
-  --stretch <factor>    Stretch factor (default: 8)
-  --loops <count>       Segment loop count (default: 1)
-  --window <seconds>    Grain window size (default: 0.25)
-  --overlap <ratio>     Grain overlap from 0 to 0.95 (default: 0.75)
-  --seed <integer>      Deterministic grain seed (default: 11)
-  --help                Show this help
-`);
+function runNative(binary: string, args: string[]): Promise<void> {
+  const { promise, resolve: resolvePromise, reject } = Promise.withResolvers<void>();
+  const child = spawn(binary, args, { stdio: "inherit" });
+  child.on("error", reject);
+  child.on("exit", (code, signal) => {
+    if (code === 0) resolvePromise();
+    else reject(new Error(`Paulstretch exited with ${code ?? `signal ${signal}`}.`));
+  });
+  return promise;
 }
 
 async function main(): Promise<void> {
@@ -48,27 +92,65 @@ async function main(): Promise<void> {
     return;
   }
 
-  const inputPath = args.find((value) => !value.startsWith("--"));
+  let inputPath = "";
+  let outputPath = "";
+  let start = 0;
+  let end = Number.POSITIVE_INFINITY;
+  let loops = 1;
+  const nativeArgs: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--output") {
+      outputPath = requiredValue(args, index, arg);
+      index += 1;
+    } else if (arg === "--start" || arg === "--end" || arg === "--loops") {
+      const value = requiredValue(args, index, arg);
+      const parsed = numberValue(value, arg);
+      if (arg === "--start") start = parsed;
+      if (arg === "--end") end = parsed;
+      if (arg === "--loops") loops = parsed;
+      index += 1;
+    } else if (arg === "--filter-stop") {
+      nativeArgs.push(arg);
+    } else if (PASSTHROUGH_OPTIONS[arg]) {
+      nativeArgs.push(arg, requiredValue(args, index, arg));
+      index += 1;
+    } else if (arg.startsWith("--")) {
+      throw new Error(`Unknown option '${arg}'.`);
+    } else if (!inputPath) {
+      inputPath = arg;
+    } else if (!outputPath) {
+      outputPath = arg;
+    } else {
+      throw new Error(`Unexpected argument '${arg}'.`);
+    }
+  }
+
   if (!inputPath) throw new Error("An input WAV path is required.");
+  if (!outputPath) outputPath = `${basename(inputPath, extname(inputPath))}-stretched.wav`;
+  if (!Number.isInteger(loops) || loops < 1) throw new Error("--loops must be a positive integer.");
+
   const input = decodeWav(await readFile(resolve(inputPath)));
   const duration = input.samples.length / input.channels / input.sampleRate;
-  const start = numberOption(args, "--start", 0);
-  const end = numberOption(args, "--end", duration);
-  const params: StretchParams = {
-    ...DEFAULT_PARAMS,
-    stretch: numberOption(args, "--stretch", DEFAULT_PARAMS.stretch),
-    loops: numberOption(args, "--loops", DEFAULT_PARAMS.loops),
-    windowSeconds: numberOption(args, "--window", DEFAULT_PARAMS.windowSeconds),
-    overlap: numberOption(args, "--overlap", DEFAULT_PARAMS.overlap),
-    seed: numberOption(args, "--seed", DEFAULT_PARAMS.seed),
-  };
-  const segment: Segment = { start, end };
-  const output = stretchPcm(input, segment, params);
-  const defaultName = `${basename(inputPath, ".wav")}-stretched.wav`;
-  const outputPath = resolve(option(args, "--output") ?? defaultName);
-  await writeFile(outputPath, encodeWav(output));
-  console.log(`Wrote ${outputPath}`);
-  console.log(`Input ${duration.toFixed(2)}s → output ${(output.samples.length / output.channels / output.sampleRate).toFixed(2)}s`);
+  const selectedEnd = Number.isFinite(end) ? end : duration;
+  if (start < 0 || selectedEnd <= start || selectedEnd > duration) {
+    throw new Error(`Segment must fit inside the ${duration.toFixed(2)}s input.`);
+  }
+
+  const needsPreparedInput = start !== 0 || selectedEnd !== duration || loops !== 1;
+  const temporaryDirectory = needsPreparedInput ? await mkdtemp(join(tmpdir(), "tunestretch-")) : undefined;
+  const preparedInput = temporaryDirectory ? join(temporaryDirectory, "segment.wav") : resolve(inputPath);
+  if (temporaryDirectory) {
+    await writeFile(preparedInput, encodeWav(cropAndLoop(input, start, selectedEnd, loops)));
+  }
+
+  try {
+    await runNative(nativeBinary(), [...nativeArgs, preparedInput, resolve(outputPath)]);
+  } finally {
+    if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+  console.log(`Rendered with upstream libpaulstretch → ${resolve(outputPath)}`);
 }
 
 main().catch((error: unknown) => {

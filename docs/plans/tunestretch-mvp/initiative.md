@@ -10,8 +10,8 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 
 ## Acceptance
 - A fresh checkout installs and runs with documented package scripts.
-- The CLI accepts a local WAV file, applies configured stretch/segment/loop settings, and writes a WAV output.
-- The web UI imports a local audio file without upload, exposes stretch parameters, previews output in the browser, and supports segment loops, multiple offset layers, generated arrangements, and sequencer playback.
+- The CLI accepts a local WAV file, applies configured stretch/segment/loop settings, and writes a WAV output through upstream libpaulstretch.
+- The web UI imports a local audio file without upload, exposes stretch parameters, previews output through upstream libpaulstretch WASM, and supports segment loops, multiple offset layers, generated arrangements, and sequencer playback.
 - Core arrangement logic is deterministic when given a seed and has focused behavioral checks.
 
 ## Verification
@@ -20,14 +20,16 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Browser smoke check of import, parameter update, preview, and at least one layer/sequencer interaction.
 
 ## Constraints and decisions
-- Greenfield React + Vite frontend and Node TypeScript CLI; shared pure TypeScript domain/audio modules.
-- Keep the first implementation dependency-light and local-only. Browser decoding uses Web Audio; CLI starts with PCM WAV input/output so it remains self-contained.
-- Use a Paulstretch-inspired granular overlap/add core that is deterministic with a seed. Keep the algorithm boundary replaceable if FFT phase randomization is added later.
+- Greenfield React + Vite frontend and Node TypeScript CLI; TypeScript owns arrangement policy while upstream libpaulstretch owns stretch DSP.
+- Pin upstream `olilarkin/libpaulstretch` at a tagged release and keep it as a git submodule rather than copying GPL-2.0 source into this repository.
+- Native CLI uses the upstream CMake target. Browser preview uses the upstream Emscripten/WASM build; the generated WASM output stays build-generated and is ignored.
 - The UI owns transient playback state; shared domain modules own arrangement data and scheduling calculations.
 
 ## Progress
 - Git and Beads initialized; the project bead is `tunestretch-2k3`.
-- Shared deterministic granular audio engine, WAV codec, arrangement generation, layered rendering, and nested sequencer scheduling live in `src/shared/audio.ts`.
-- CLI lives in `src/cli.ts`; browser surface lives in `src/web/App.tsx` and `src/web/styles.css`.
-- Verified with `npm test`, `npm run build`, a generated-WAV CLI smoke run, and a browser import/generate/sequence smoke run.
-- Follow-up risk: the stretcher is intentionally Paulstretch-inspired granular overlap/add rather than a full FFT phase-randomization implementation; CLI input/output is PCM WAV.
+- Integration bead: `tunestretch-6sj`.
+- `olilarkin/libpaulstretch` is pinned as `vendor/libpaulstretch` at the v0.3.0 release commit.
+- `src/cli.ts` now crops/loops segments locally, then invokes the upstream native `paulstretch` executable.
+- `src/web/paulstretch.ts` loads the generated upstream Emscripten module; arrangement and sequencer policy remains in TypeScript.
+- `npm run build:core`, `npm run build:wasm`, upstream CTest, `npm test`, `npm run build`, native CLI smoke, and browser WASM preview/layer/sequence smoke all passed.
+- Upstream is GPL-2.0. Generated WASM is ignored and must be produced with `npm run build:wasm` before browser preview.
