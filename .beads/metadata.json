@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "tunestretch",
+  "project_id": "c62045b1-f0e1-4595-9e13-9ac10df2f446"
+}
