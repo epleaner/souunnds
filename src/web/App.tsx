@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   DEFAULT_PARAMS,
   generateArrangement,
   renderArrangementAsync,
   renderSequencerAsync,
+  sequenceCellDurations,
   type Arrangement,
   type Layer,
   type PcmAudio,
@@ -13,6 +14,9 @@ import {
 import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
 
 const MAIN_SEQUENCE_ID = "main-sequencer";
+
+type SequencePlayback = { cellDurations: number[]; startedAt: number };
+type ResizeState = { index: number; edge: "left" | "right"; startX: number; initialLength: number; pixelsPerLength: number };
 
 function formatSeconds(seconds: number): string {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -72,13 +76,43 @@ export function App() {
   const [generatedLinked, setGeneratedLinked] = useState(true);
   const [status, setStatus] = useState("Import an audio file to begin.");
   const [playing, setPlaying] = useState(false);
+  const [sequencePlayback, setSequencePlayback] = useState<SequencePlayback | null>(null);
+  const [sequenceProgress, setSequenceProgress] = useState<{ index: number; fraction: number } | null>(null);
   const contextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+  const resizeRef = useRef<ResizeState | null>(null);
 
   const arrangement = useMemo<Arrangement>(() => ({ layers, sequencers }), [layers, sequencers]);
   const activeSequencer = sequencers[0];
   const selectedCell = activeSequencer?.steps[selectedCellIndex];
   const layerNames = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.name])), [layers]);
+
+  useEffect(() => {
+    if (!sequencePlayback) {
+      setSequenceProgress(null);
+      return;
+    }
+    let frameId = 0;
+    const update = () => {
+      const elapsed = (performance.now() - sequencePlayback.startedAt) / 1000;
+      let cursor = 0;
+      let progress = { index: sequencePlayback.cellDurations.length - 1, fraction: 1 };
+      for (let index = 0; index < sequencePlayback.cellDurations.length; index += 1) {
+        const cellDuration = Math.max(0, sequencePlayback.cellDurations[index]);
+        if (elapsed < cursor + cellDuration || (cellDuration === 0 && elapsed <= cursor)) {
+          progress = { index, fraction: cellDuration ? Math.min(1, Math.max(0, (elapsed - cursor) / cellDuration)) : 1 };
+          break;
+        }
+        cursor += cellDuration;
+      }
+      setSequenceProgress(progress);
+      if (elapsed < sequencePlayback.cellDurations.reduce((sum, value) => sum + Math.max(0, value), 0)) {
+        frameId = requestAnimationFrame(update);
+      }
+    };
+    frameId = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frameId);
+  }, [sequencePlayback]);
 
   function ensureContext(): AudioContext {
     if (!contextRef.current) contextRef.current = new AudioContext();
@@ -89,10 +123,11 @@ export function App() {
     sourceNodeRef.current?.stop();
     sourceNodeRef.current = null;
     setPlaying(false);
+    setSequencePlayback(null);
     setStatus("Playback stopped.");
   }
 
-  async function playPcm(audio: PcmAudio, label: string): Promise<void> {
+  async function playPcm(audio: PcmAudio, label: string, cellDurations?: number[]): Promise<void> {
     const context = ensureContext();
     await context.resume();
     stopPlayback();
@@ -103,11 +138,13 @@ export function App() {
       if (sourceNodeRef.current === node) {
         sourceNodeRef.current = null;
         setPlaying(false);
+        setSequencePlayback(null);
       }
     };
     sourceNodeRef.current = node;
     node.start();
     setPlaying(true);
+    if (cellDurations) setSequencePlayback({ cellDurations, startedAt: performance.now() });
     setStatus(`Playing ${label} · ${formatSeconds(audio.samples.length / audio.channels / audio.sampleRate)}`);
   }
 
@@ -161,7 +198,8 @@ export function App() {
     if (!source || !activeSequencer?.steps.length) return setStatus("Add a sequence cell first.");
     setStatus("Rendering sequence with upstream Paulstretch…");
     try {
-      await playPcm(await renderSequencerAsync(source, arrangement, MAIN_SEQUENCE_ID, stretchWithPaulstretch), activeSequencer.name);
+      const cellDurations = sequenceCellDurations(source, arrangement, MAIN_SEQUENCE_ID);
+      await playPcm(await renderSequencerAsync(source, arrangement, MAIN_SEQUENCE_ID, stretchWithPaulstretch), activeSequencer.name, cellDurations);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     }
@@ -188,8 +226,8 @@ export function App() {
     setSequencers((sequences) => sequences.map((sequence) => ({
       ...sequence,
       steps: remaining.length
-        ? sequence.steps.map((step) => step.targetId === id ? { ...step, targetId: remaining[0].id } : step)
-        : [],
+        ? sequence.steps.map((step) => step.targetType === "layer" && step.targetId === id ? { ...step, targetId: remaining[0].id } : step)
+        : sequence.steps.filter((step) => step.targetType === "gap"),
     })));
     setSelectedCellIndex(0);
   }
@@ -200,12 +238,12 @@ export function App() {
       count: generatedCount,
       seed: generatedSeed,
       linked: generatedLinked,
-    });
+    }, source);
     setLayers(generated.layers);
     setSequencers((current) => current.map((sequence) => ({
       ...sequence,
       steps: sequence.steps.length
-        ? sequence.steps.map((step) => ({ ...step, targetId: generated.layers[0].id }))
+        ? sequence.steps.map((step) => step.targetType === "layer" ? { ...step, targetId: generated.layers[0].id } : step)
         : Array.from({ length: 4 }, () => createSequenceStep(generated.layers[0].id)),
     })));
     setSelectedCellIndex(0);
@@ -227,16 +265,50 @@ export function App() {
   }
 
   function updateStep(index: number, patch: Partial<SequenceStep>): void {
-    if (!activeSequencer) return;
     updateSequence({
-      steps: activeSequencer.steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)),
+      steps: activeSequencer?.steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)) ?? [],
     });
+  }
+
+  function setCellType(index: number, targetType: "layer" | "gap"): void {
+    if (targetType === "gap") updateStep(index, { targetType, targetId: "", gapSeconds: 1 });
+    else updateStep(index, { targetType, targetId: layers[0]?.id ?? "", gapSeconds: 0 });
   }
 
   function removeCell(index: number): void {
     if (!activeSequencer || activeSequencer.steps.length <= 1) return;
     updateSequence({ steps: activeSequencer.steps.filter((_, stepIndex) => stepIndex !== index) });
     setSelectedCellIndex((current) => Math.min(current, activeSequencer.steps.length - 2));
+  }
+
+  function beginResize(event: ReactPointerEvent<HTMLButtonElement>, index: number, edge: "left" | "right"): void {
+    const step = activeSequencer?.steps[index];
+    const cell = event.currentTarget.parentElement;
+    if (!step || !cell) return;
+    const width = cell.getBoundingClientRect().width;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeRef.current = {
+      index,
+      edge,
+      startX: event.clientX,
+      initialLength: Math.max(0.25, step.length),
+      pixelsPerLength: width / Math.max(0.25, step.length),
+    };
+    setSelectedCellIndex(index);
+  }
+
+  function moveResize(event: ReactPointerEvent<HTMLButtonElement>, index: number, edge: "left" | "right"): void {
+    const resize = resizeRef.current;
+    if (!resize || resize.index !== index || resize.edge !== edge) return;
+    const delta = (event.clientX - resize.startX) / Math.max(1, resize.pixelsPerLength);
+    const length = Math.max(0.25, Math.min(16, resize.initialLength + (edge === "right" ? delta : -delta)));
+    updateStep(index, { length: Math.round(length * 4) / 4 });
+  }
+
+  function endResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    if (resizeRef.current) event.currentTarget.releasePointerCapture(event.pointerId);
+    resizeRef.current = null;
   }
 
   return (
@@ -255,10 +327,7 @@ export function App() {
           <h2>{fileName || "No file selected"}</h2>
         </div>
         <div className="panel-actions">
-          <label className="file-button">
-            Choose audio
-            <input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])} />
-          </label>
+          <label className="file-button">Choose audio<input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])} /></label>
           <button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button>
         </div>
         <div className="status" role="status" aria-live="polite">{status}</div>
@@ -266,10 +335,7 @@ export function App() {
 
       <div className="studio">
         <section className="panel layers-panel">
-          <div className="panel-heading">
-            <div><p className="section-kicker">01 · Layers</p><h2>Layers</h2></div>
-            <div className="panel-actions"><button className="quiet-button" onClick={addLayer} disabled={!source}>+ Layer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div>
-          </div>
+          <div className="panel-heading"><div><p className="section-kicker">01 · Layers</p><h2>Layers</h2></div><div className="panel-actions"><button className="quiet-button" onClick={addLayer} disabled={!source}>+ Layer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
           <div className="generator-row">
             <div><strong>Generate layers</strong></div>
             <label>Count <input type="number" min="1" max="12" value={generatedCount} onChange={(event) => setGeneratedCount(Number(event.target.value))} /></label>
@@ -298,38 +364,33 @@ export function App() {
         </section>
 
         <section className="panel sequence-panel">
-          <div className="panel-heading">
-            <div><p className="section-kicker">02 · Sequence</p><h2>Sequence</h2></div>
-            <div className="panel-actions"><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div>
-          </div>
-          <div className="sequence-toolbar">
-            <label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label>
-            <label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label>
-          </div>
+          <div className="panel-heading"><div><p className="section-kicker">02 · Sequence</p><h2>Sequence</h2></div><div className="panel-actions"><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
+          <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label></div>
           <div className="sequence-grid" aria-label="Sequence cells">
             {!activeSequencer?.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
-            {activeSequencer?.steps.map((step, index) => (
-              <button
-                className={`sequence-cell ${index === selectedCellIndex ? "is-selected" : ""}`}
-                key={`${activeSequencer.id}-cell-${index}`}
-                style={{ flex: `${Math.max(0.25, step.length)} 1 0` }}
-                onClick={() => setSelectedCellIndex(index)}
-                aria-label={`Cell ${index + 1}, ${layerNames.get(step.targetId) ?? "Unassigned"}`}
-                aria-pressed={index === selectedCellIndex}
-              >
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <strong>{layerNames.get(step.targetId) ?? "Unassigned"}</strong>
-              </button>
-            ))}
+            {activeSequencer?.steps.map((step, index) => {
+              const progress = sequenceProgress?.index === index ? sequenceProgress.fraction : sequenceProgress && index < sequenceProgress.index ? 1 : 0;
+              const label = step.targetType === "gap" ? "Gap" : layerNames.get(step.targetId) ?? "Unassigned";
+              return (
+                <div className={`sequence-cell ${index === selectedCellIndex ? "is-selected" : ""}`} key={`${activeSequencer.id}-cell-${index}`} style={{ flex: `${Math.max(0.25, step.length)} 1 0` }}>
+                  <button className="sequence-cell-edge" type="button" aria-label={`Resize cell ${index + 1} left edge`} onPointerDown={(event) => beginResize(event, index, "left")} onPointerMove={(event) => moveResize(event, index, "left")} onPointerUp={endResize} onPointerCancel={endResize} />
+                  <button className="sequence-cell-main" type="button" onClick={() => setSelectedCellIndex(index)} aria-label={`Cell ${index + 1}, ${label}`} aria-pressed={index === selectedCellIndex}>
+                    <span className="sequence-cell-progress" style={{ width: `${(progress ?? 0) * 100}%` }} />
+                    <span className="sequence-cell-content"><span>{String(index + 1).padStart(2, "0")}</span><strong>{label}</strong></span>
+                  </button>
+                  <button className="sequence-cell-edge" type="button" aria-label={`Resize cell ${index + 1} right edge`} onPointerDown={(event) => beginResize(event, index, "right")} onPointerMove={(event) => moveResize(event, index, "right")} onPointerUp={endResize} onPointerCancel={endResize} />
+                </div>
+              );
+            })}
           </div>
           {selectedCell ? (
             <div className="cell-inspector">
               <div className="cell-inspector-heading"><strong>Cell {String(selectedCellIndex + 1).padStart(2, "0")}</strong><button className="icon-button" onClick={() => removeCell(selectedCellIndex)} disabled={activeSequencer.steps.length <= 1} aria-label="Remove selected cell">×</button></div>
               <div className="cell-fields">
-                <label>Layer <select value={selectedCell.targetId} onChange={(event) => updateStep(selectedCellIndex, { targetId: event.target.value })}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select></label>
+                <label>Type <select value={selectedCell.targetType === "gap" ? "gap" : "layer"} onChange={(event) => setCellType(selectedCellIndex, event.target.value as "layer" | "gap")}><option value="layer">Layer</option><option value="gap">Gap</option></select></label>
+                {selectedCell.targetType === "gap" ? <label>Gap duration <input type="number" min="0" step="0.1" value={selectedCell.gapSeconds} onChange={(event) => updateStep(selectedCellIndex, { gapSeconds: Math.max(0, Number(event.target.value)) })} /></label> : <label>Layer <select value={selectedCell.targetId} onChange={(event) => updateStep(selectedCellIndex, { targetId: event.target.value })}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select></label>}
                 <label>Relative length <input type="number" min="0.25" max="16" step="0.25" value={selectedCell.length} onChange={(event) => updateStep(selectedCellIndex, { length: Math.max(0.25, Number(event.target.value)) })} /></label>
-                <label>Repeats <input type="number" min="1" max="32" step="1" value={selectedCell.repeats} onChange={(event) => updateStep(selectedCellIndex, { repeats: Number(event.target.value) })} /></label>
-                <label>Gap <input type="number" min="0" step="0.1" value={selectedCell.gapSeconds} onChange={(event) => updateStep(selectedCellIndex, { gapSeconds: Number(event.target.value) })} /></label>
+                {selectedCell.targetType !== "gap" && <label>Repeats <input type="number" min="1" max="32" step="1" value={selectedCell.repeats} onChange={(event) => updateStep(selectedCellIndex, { repeats: Number(event.target.value) })} /></label>}
               </div>
             </div>
           ) : null}

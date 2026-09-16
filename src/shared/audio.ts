@@ -31,7 +31,7 @@ export interface Layer {
 
 export interface SequenceStep {
   targetId: string;
-  targetType: "layer" | "sequencer";
+  targetType: "layer" | "sequencer" | "gap";
   repeats: number;
   gapSeconds: number;
   length: number;
@@ -320,6 +320,10 @@ export function scheduleSequencer(
     for (const step of sequencer.steps) {
       const repeats = Math.max(1, Math.floor(step.repeats));
       for (let repeat = 0; repeat < repeats; repeat += 1) {
+        if (step.targetType === "gap") {
+          cursor += Math.max(0, step.gapSeconds);
+          continue;
+        }
         const baseDuration = step.targetType === "layer"
           ? layerDurations[step.targetId] ?? (layers.get(step.targetId)?.params.stretch ?? 1)
           : schedule(step.targetId, cursor);
@@ -385,6 +389,21 @@ function sequenceSchedule(
   );
   return scheduleSequencer(arrangement, sequencerId, layerDurations);
 }
+export function sequenceCellDurations(
+  audio: PcmAudio,
+  arrangement: Arrangement,
+  sequencerId: string,
+): number[] {
+  const sequence = arrangement.sequencers.find((item) => item.id === sequencerId);
+  const layerDurations = new Map(
+    arrangement.layers.map((layer) => [layer.id, layerDuration(layer, audio.sampleRate, frameCount(audio))]),
+  );
+  return sequence?.steps.map((step) => {
+    if (step.targetType === "gap") return Math.max(0, step.gapSeconds);
+    const baseDuration = step.targetType === "layer" ? layerDurations.get(step.targetId) ?? 0 : 0;
+    return baseDuration * positive(step.length, 1) * Math.max(1, Math.floor(step.repeats));
+  }) ?? [];
+}
 
 export function renderSequencer(
   audio: PcmAudio,
@@ -415,9 +434,41 @@ export async function renderSequencerAsync(
   return mixScheduledLayers(audio, arrangement, schedule, rendered);
 }
 
+function audibleStart(
+  audio: PcmAudio,
+  lengthSeconds: number,
+  random: () => number,
+): number {
+  const sourceFrames = frameCount(audio);
+  const segmentFrames = Math.max(1, Math.min(sourceFrames, Math.ceil(lengthSeconds * audio.sampleRate)));
+  const maxStart = Math.max(0, sourceFrames - segmentFrames);
+  let bestStart = 0;
+  let bestEnergy = -1;
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    const start = Math.floor(random() * (maxStart + 1));
+    const step = Math.max(1, Math.floor(segmentFrames / 64));
+    let energy = 0;
+    let count = 0;
+    for (let frame = 0; frame < segmentFrames; frame += step) {
+      for (let channel = 0; channel < audio.channels; channel += 1) {
+        const sample = audio.samples[(start + frame) * audio.channels + channel];
+        energy += sample * sample;
+        count += 1;
+      }
+    }
+    const rms = count ? energy / count : 0;
+    if (rms > bestEnergy) {
+      bestStart = start;
+      bestEnergy = rms;
+    }
+  }
+  return bestStart / audio.sampleRate;
+}
+
 export function generateArrangement(
   durationSeconds: number,
   options: { count: number; seed: number; linked: boolean },
+  audio?: PcmAudio,
 ): Arrangement {
   const random = seededRandom(options.seed);
   const count = Math.max(1, Math.floor(options.count));
@@ -425,7 +476,9 @@ export function generateArrangement(
   const layers: Layer[] = [];
   for (let index = 0; index < count; index += 1) {
     const length = Math.max(0.15, durationSeconds * (0.08 + random() * 0.24));
-    const start = durationSeconds <= length ? 0 : random() * (durationSeconds - length);
+    const start = audio
+      ? audibleStart(audio, length, random)
+      : durationSeconds <= length ? 0 : random() * (durationSeconds - length);
     const stretch = options.linked ? sharedStretch : 2 + random() * 18;
     layers.push({
       id: `generated-${index + 1}`,

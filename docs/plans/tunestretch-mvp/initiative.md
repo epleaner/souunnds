@@ -47,4 +47,5 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Layer, preview, and sequence rendering errors now surface in the live status instead of leaving the UI unresolved.
 - Sequence-grid change bead: `tunestretch-6hl`.
 - The browser workspace now has two coordinated regions: Layers and Sequence.
-- Sequence cells are ordered one-dimensional controls; cell width and playback timing use each cell's positive relative `length`, with a selected-cell inspector for layer assignment and tuning.
+- Sequence cells now show a live playback fill, resize from either edge, and support standalone gap cells with their own duration.
+- Generated layer placement now samples source energy to avoid selecting silent regions when audio is available.

@@ -59,6 +59,18 @@ describe("audio core", () => {
     expect(second).toEqual(first);
   });
 
+
+  it("chooses audible source regions for generated layers", () => {
+    const samples = new Float32Array(1000);
+    samples.fill(1, 200, 800);
+    const source = { sampleRate: 100, channels: 1, samples };
+    const arrangement = generateArrangement(10, { count: 3, seed: 42, linked: false }, source);
+    for (const layer of arrangement.layers) {
+      const start = Math.floor(layer.segment.start * source.sampleRate);
+      const end = Math.ceil(layer.segment.end * source.sampleRate);
+      expect(source.samples.subarray(start, end).some((sample) => sample !== 0)).toBe(true);
+    }
+  });
   it("schedules nested sequencers in order", () => {
     const arrangement: Arrangement = {
       layers: [
@@ -94,6 +106,29 @@ describe("audio core", () => {
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
       { layerId: "layer", startSeconds: 0 },
       { layerId: "layer", startSeconds: 0.5 },
+    ]);
+  });
+
+  it("schedules gap cells without a layer", () => {
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        {
+          id: "main",
+          name: "Main",
+          steps: [
+            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1 },
+            { targetId: "", targetType: "gap", repeats: 1, gapSeconds: 2, length: 1 },
+            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1 },
+          ],
+        },
+      ],
+    };
+    expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
+      { layerId: "layer", startSeconds: 0 },
+      { layerId: "layer", startSeconds: 3 },
     ]);
   });
 });
