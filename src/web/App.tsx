@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
+  DEFAULT_PLAYBACK_ADSR,
+  applyPlaybackAdsr,
   DEFAULT_PARAMS,
   generateArrangement,
   renderArrangementAsync,
@@ -8,11 +10,11 @@ import {
   type Arrangement,
   type Layer,
   type PcmAudio,
+  type PlaybackAdsr,
   type SequenceStep,
   type Sequencer,
 } from "../shared/audio";
 import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
-
 const MAIN_SEQUENCE_ID = "main-sequencer";
 
 type SequencePlayback = { cellDurations: number[]; startedAt: number };
@@ -78,6 +80,7 @@ export function App() {
   const [playing, setPlaying] = useState(false);
   const [sequencePlayback, setSequencePlayback] = useState<SequencePlayback | null>(null);
   const [sequenceProgress, setSequenceProgress] = useState<{ index: number; fraction: number } | null>(null);
+  const [adsr, setAdsr] = useState<PlaybackAdsr>({ ...DEFAULT_PLAYBACK_ADSR });
   const contextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
@@ -126,13 +129,13 @@ export function App() {
     setSequencePlayback(null);
     setStatus("Playback stopped.");
   }
-
   async function playPcm(audio: PcmAudio, label: string, cellDurations?: number[]): Promise<void> {
     const context = ensureContext();
     await context.resume();
     stopPlayback();
+    const preparedAudio = applyPlaybackAdsr(audio, adsr);
     const node = context.createBufferSource();
-    node.buffer = audioBufferFromPcm(context, audio);
+    node.buffer = audioBufferFromPcm(context, preparedAudio);
     node.connect(context.destination);
     node.onended = () => {
       if (sourceNodeRef.current === node) {
@@ -145,7 +148,7 @@ export function App() {
     node.start();
     setPlaying(true);
     if (cellDurations) setSequencePlayback({ cellDurations, startedAt: performance.now() });
-    setStatus(`Playing ${label} · ${formatSeconds(audio.samples.length / audio.channels / audio.sampleRate)}`);
+    setStatus(`Playing ${label} · ${formatSeconds(preparedAudio.samples.length / preparedAudio.channels / preparedAudio.sampleRate)}`);
   }
 
   async function importFile(file: File): Promise<void> {
@@ -331,6 +334,18 @@ export function App() {
           <button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button>
         </div>
         <div className="status" role="status" aria-live="polite">{status}</div>
+        <div className="global-playback-controls">
+          <div>
+            <p className="section-kicker">Global playback</p>
+            <h3>ADSR envelope</h3>
+          </div>
+          <div className="adsr-grid">
+            <label>Attack <output>{adsr.attackSeconds.toFixed(2)}s</output><input aria-label="Attack" type="range" min="0" max="4" step="0.01" value={adsr.attackSeconds} onChange={(event) => setAdsr({ ...adsr, attackSeconds: Number(event.target.value) })} /></label>
+            <label>Decay <output>{adsr.decaySeconds.toFixed(2)}s</output><input aria-label="Decay" type="range" min="0" max="4" step="0.01" value={adsr.decaySeconds} onChange={(event) => setAdsr({ ...adsr, decaySeconds: Number(event.target.value) })} /></label>
+            <label>Sustain <output>{Math.round(adsr.sustainLevel * 100)}%</output><input aria-label="Sustain" type="range" min="0" max="1" step="0.01" value={adsr.sustainLevel} onChange={(event) => setAdsr({ ...adsr, sustainLevel: Number(event.target.value) })} /></label>
+            <label>Release <output>{adsr.releaseSeconds.toFixed(2)}s</output><input aria-label="Release" type="range" min="0" max="4" step="0.01" value={adsr.releaseSeconds} onChange={(event) => setAdsr({ ...adsr, releaseSeconds: Number(event.target.value) })} /></label>
+          </div>
+        </div>
       </section>
 
       <div className="studio">

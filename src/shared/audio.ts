@@ -5,6 +5,46 @@ export interface PcmAudio {
   samples: Float32Array;
 }
 
+export interface PlaybackAdsr {
+  attackSeconds: number;
+  decaySeconds: number;
+  sustainLevel: number;
+  releaseSeconds: number;
+}
+
+export const DEFAULT_PLAYBACK_ADSR: PlaybackAdsr = {
+  attackSeconds: 0.01,
+  decaySeconds: 0.08,
+  sustainLevel: 0.85,
+  releaseSeconds: 0.12,
+};
+
+export function applyPlaybackAdsr(audio: PcmAudio, adsr: PlaybackAdsr): PcmAudio {
+  const attackFrames = Math.max(0, Math.round(adsr.attackSeconds * audio.sampleRate));
+  const decayFrames = Math.max(0, Math.round(adsr.decaySeconds * audio.sampleRate));
+  const releaseFrames = Math.max(0, Math.round(adsr.releaseSeconds * audio.sampleRate));
+  const sustainLevel = Math.min(1, Math.max(0, adsr.sustainLevel));
+  if (!attackFrames && !decayFrames && !releaseFrames && sustainLevel === 1) return audio;
+
+  const frames = frameCount(audio);
+  const output = new Float32Array(audio.samples.length);
+  const releaseStart = Math.max(0, frames - releaseFrames);
+  for (let frame = 0; frame < frames; frame += 1) {
+    let gain = sustainLevel;
+    if (attackFrames > 0 && frame < attackFrames) {
+      gain = frame / attackFrames;
+    } else if (decayFrames > 0 && frame < attackFrames + decayFrames) {
+      gain = 1 - ((1 - sustainLevel) * (frame - attackFrames)) / decayFrames;
+    }
+    if (releaseFrames > 0 && frame >= releaseStart) {
+      gain *= Math.max(0, (frames - frame - 1) / releaseFrames);
+    }
+    for (let channel = 0; channel < audio.channels; channel += 1) {
+      output[frame * audio.channels + channel] = audio.samples[frame * audio.channels + channel] * gain;
+    }
+  }
+  return { ...audio, samples: output };
+}
 export interface StretchParams {
   stretch: number;
   windowSeconds: number;
@@ -53,6 +93,7 @@ export type AsyncStretchFunction = (audio: PcmAudio, segment: Segment, params: S
 export interface ScheduledLayer {
   layerId: string;
   startSeconds: number;
+  durationSeconds: number;
 }
 
 export const DEFAULT_PARAMS: StretchParams = {
@@ -329,7 +370,7 @@ export function scheduleSequencer(
           : schedule(step.targetId, cursor);
         const duration = baseDuration * positive(step.length, 1);
         if (step.targetType === "layer" && layers.has(step.targetId)) {
-          scheduled.push({ layerId: step.targetId, startSeconds: cursor });
+          scheduled.push({ layerId: step.targetId, startSeconds: cursor, durationSeconds: duration });
         }
         cursor += duration + Math.max(0, step.gapSeconds);
       }
@@ -352,7 +393,7 @@ function mixScheduledLayers(
   const totalFrames = schedule.reduce((longest, item) => {
     const clip = rendered.get(item.layerId);
     return clip
-      ? Math.max(longest, Math.floor(item.startSeconds * audio.sampleRate) + frameCount(clip))
+      ? Math.max(longest, Math.floor(item.startSeconds * audio.sampleRate) + Math.max(1, Math.round(item.durationSeconds * audio.sampleRate)))
       : longest;
   }, 1);
   const output = new Float32Array(totalFrames * audio.channels);
@@ -361,12 +402,16 @@ function mixScheduledLayers(
     const layer = layerMap.get(item.layerId);
     if (!clip || !layer || layer.muted) continue;
     const startFrame = Math.floor(item.startSeconds * audio.sampleRate);
-    for (let frame = 0; frame < frameCount(clip); frame += 1) {
+    const clipFrames = frameCount(clip);
+    if (!clipFrames) continue;
+    const targetFrames = Math.max(1, Math.round(item.durationSeconds * audio.sampleRate));
+    for (let frame = 0; frame < targetFrames; frame += 1) {
+      const clipFrame = frame % clipFrames;
       const outputFrame = startFrame + frame;
       if (outputFrame >= totalFrames) break;
       for (let channel = 0; channel < audio.channels; channel += 1) {
         output[outputFrame * audio.channels + channel] +=
-          clip.samples[frame * audio.channels + channel] * layer.gain;
+          clip.samples[clipFrame * audio.channels + channel] * layer.gain;
       }
     }
   }

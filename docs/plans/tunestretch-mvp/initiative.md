@@ -49,3 +49,5 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - The browser workspace now has two coordinated regions: Layers and Sequence.
 - Sequence cells now show a live playback fill, resize from either edge, and support standalone gap cells with their own duration.
 - Generated layer placement now samples source energy to avoid selecting silent regions when audio is available.
+- Playback uses solid red sequence fills, contiguous edge-to-edge cells, and a global ADSR envelope applied before Web Audio playback.
+- Sequence rendering loops a layer's rendered clip when a cell's relative duration exceeds the clip duration.

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PARAMS,
+  applyPlaybackAdsr,
   decodeWav,
   encodeWav,
   generateArrangement,
   renderArrangement,
+  renderSequencerAsync,
   scheduleSequencer,
   stretchPcm,
   type Arrangement,
@@ -71,6 +73,12 @@ describe("audio core", () => {
       expect(source.samples.subarray(start, end).some((sample) => sample !== 0)).toBe(true);
     }
   });
+
+  it("applies a global playback ADSR envelope", () => {
+    const audio: PcmAudio = { sampleRate: 4, channels: 1, samples: new Float32Array([1, 1, 1, 1, 1, 1]) };
+    const enveloped = applyPlaybackAdsr(audio, { attackSeconds: 0.25, decaySeconds: 0.25, sustainLevel: 0.5, releaseSeconds: 0.25 });
+    expect([...enveloped.samples]).toEqual([0, 1, 0.5, 0.5, 0.5, 0]);
+  });
   it("schedules nested sequencers in order", () => {
     const arrangement: Arrangement = {
       layers: [
@@ -82,8 +90,8 @@ describe("audio core", () => {
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
-      { layerId: "layer", startSeconds: 0 },
-      { layerId: "layer", startSeconds: 2.5 },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 1 },
+      { layerId: "layer", startSeconds: 2.5, durationSeconds: 1 },
     ]);
   });
 
@@ -104,9 +112,27 @@ describe("audio core", () => {
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
-      { layerId: "layer", startSeconds: 0 },
-      { layerId: "layer", startSeconds: 0.5 },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 0.5 },
+      { layerId: "layer", startSeconds: 0.5, durationSeconds: 2 },
     ]);
+  });
+
+  it("loops rendered layer audio to fill longer cells", async () => {
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        {
+          id: "main",
+          name: "Main",
+          steps: [{ targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 2 }],
+        },
+      ],
+    };
+    const rendered = await renderSequencerAsync(toneAudio(), arrangement, "main", async (audio, segment, params) => stretchPcm(audio, segment, params));
+    expect(rendered.samples.length).toBe(16);
+    expect(rendered.samples[9]).toBeCloseTo(rendered.samples[1], 5);
   });
 
   it("schedules gap cells without a layer", () => {
@@ -127,8 +153,8 @@ describe("audio core", () => {
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
-      { layerId: "layer", startSeconds: 0 },
-      { layerId: "layer", startSeconds: 3 },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 1 },
+      { layerId: "layer", startSeconds: 3, durationSeconds: 1 },
     ]);
   });
 });
