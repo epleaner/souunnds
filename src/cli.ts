@@ -18,7 +18,11 @@ function printHelp(): void {
 
 Usage:
   npm run build:core
-  npm run cli -- [upstream options] input.wav output.wav
+  npm run cli -- [upstream options] input.wav|input.mp3 output.wav
+
+Input:
+  WAV input is read directly. MP3 and other ffmpeg-supported audio inputs are
+  decoded to a temporary WAV before rendering (requires ffmpeg on PATH).
 
 Segment options:
   --start <seconds>     Crop the input segment before stretching (default: 0)
@@ -74,15 +78,19 @@ function nativeBinary(): string {
   return binary;
 }
 
-function runNative(binary: string, args: string[]): Promise<void> {
+function runProcess(command: string, args: string[], label: string): Promise<void> {
   const { promise, resolve: resolvePromise, reject } = Promise.withResolvers<void>();
-  const child = spawn(binary, args, { stdio: "inherit" });
-  child.on("error", reject);
+  const child = spawn(command, args, { stdio: "inherit" });
+  child.on("error", () => reject(new Error(`${label} is required and was not found on PATH.`)));
   child.on("exit", (code, signal) => {
     if (code === 0) resolvePromise();
-    else reject(new Error(`Paulstretch exited with ${code ?? `signal ${signal}`}.`));
+    else reject(new Error(`${label} exited with ${code ?? `signal ${signal}`}.`));
   });
   return promise;
+}
+
+function runNative(binary: string, args: string[]): Promise<void> {
+  return runProcess(binary, args, "Native Paulstretch renderer");
 }
 
 async function main(): Promise<void> {
@@ -127,30 +135,34 @@ async function main(): Promise<void> {
     }
   }
 
-  if (!inputPath) throw new Error("An input WAV path is required.");
+  if (!inputPath) throw new Error("An input audio path is required.");
   if (!outputPath) outputPath = `${basename(inputPath, extname(inputPath))}-stretched.wav`;
   if (!Number.isInteger(loops) || loops < 1) throw new Error("--loops must be a positive integer.");
 
-  const input = decodeWav(await readFile(resolve(inputPath)));
-  const duration = input.samples.length / input.channels / input.sampleRate;
-  const selectedEnd = Number.isFinite(end) ? end : duration;
-  if (start < 0 || selectedEnd <= start || selectedEnd > duration) {
-    throw new Error(`Segment must fit inside the ${duration.toFixed(2)}s input.`);
-  }
-
-  const needsPreparedInput = start !== 0 || selectedEnd !== duration || loops !== 1;
-  const temporaryDirectory = needsPreparedInput ? await mkdtemp(join(tmpdir(), "tunestretch-")) : undefined;
-  const preparedInput = temporaryDirectory ? join(temporaryDirectory, "segment.wav") : resolve(inputPath);
-  if (temporaryDirectory) {
-    await writeFile(preparedInput, encodeWav(cropAndLoop(input, start, selectedEnd, loops)));
-  }
-
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "tunestretch-"));
   try {
+    let decodedInput = resolve(inputPath);
+    if (extname(inputPath).toLowerCase() !== ".wav") {
+      decodedInput = join(temporaryDirectory, "decoded.wav");
+      await runProcess("ffmpeg", ["-y", "-i", resolve(inputPath), "-vn", "-acodec", "pcm_f32le", decodedInput], "ffmpeg");
+    }
+    const input = decodeWav(await readFile(decodedInput));
+    const duration = input.samples.length / input.channels / input.sampleRate;
+    const selectedEnd = Number.isFinite(end) ? end : duration;
+    if (start < 0 || selectedEnd <= start || selectedEnd > duration) {
+      throw new Error(`Segment must fit inside the ${duration.toFixed(2)}s input.`);
+    }
+
+    const needsPreparedInput = start !== 0 || selectedEnd !== duration || loops !== 1;
+    const preparedInput = needsPreparedInput ? join(temporaryDirectory, "segment.wav") : decodedInput;
+    if (needsPreparedInput) {
+      await writeFile(preparedInput, encodeWav(cropAndLoop(input, start, selectedEnd, loops)));
+    }
     await runNative(nativeBinary(), [...nativeArgs, preparedInput, resolve(outputPath)]);
+    console.log(`Rendered with upstream libpaulstretch → ${resolve(outputPath)}`);
   } finally {
-    if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+    await rm(temporaryDirectory, { recursive: true, force: true });
   }
-  console.log(`Rendered with upstream libpaulstretch → ${resolve(outputPath)}`);
 }
 
 main().catch((error: unknown) => {

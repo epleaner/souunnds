@@ -218,11 +218,11 @@ export function App() {
         <div>
           <p className="section-kicker">Source</p>
           <h2>{fileName || "Bring in a local file"}</h2>
-          <p className="muted">Audio stays in your browser. Nothing is uploaded.</p>
+          <p className="muted">MP3, WAV, and browser-supported audio stay local. Nothing is uploaded.</p>
         </div>
         <label className="file-button">
           Choose audio
-          <input type="file" accept="audio/*" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])} />
+          <input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])} />
         </label>
         <div className="status" role="status" aria-live="polite">{status}</div>
       </section>

@@ -9,9 +9,11 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - DAW integration, MIDI, or automated publishing.
 
 ## Acceptance
+
 - A fresh checkout installs and runs with documented package scripts.
-- The CLI accepts a local WAV file, applies configured stretch/segment/loop settings, and writes a WAV output through upstream libpaulstretch.
-- The web UI imports a local audio file without upload, exposes stretch parameters, previews output through upstream libpaulstretch WASM, and supports segment loops, multiple offset layers, generated arrangements, and sequencer playback.
+- The CLI accepts local WAV and MP3 (plus ffmpeg-supported audio), applies configured stretch/segment/loop settings, and writes a WAV output through upstream libpaulstretch.
+- The web UI imports local MP3/WAV audio without upload, exposes stretch parameters, previews output through upstream libpaulstretch WASM, and supports segment loops, multiple offset layers, generated arrangements, and sequencer playback.
+- The UI presents the audio workspace with a Swiss visual system: strict grid, typographic hierarchy, black/red signal palette, and responsive accessible controls.
 - Core arrangement logic is deterministic when given a seed and has focused behavioral checks.
 
 ## Verification
@@ -23,7 +25,9 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Greenfield React + Vite frontend and Node TypeScript CLI; TypeScript owns arrangement policy while upstream libpaulstretch owns stretch DSP.
 - Pin upstream `olilarkin/libpaulstretch` at a tagged release and keep it as a git submodule rather than copying GPL-2.0 source into this repository.
 - Native CLI uses the upstream CMake target. Browser preview uses the upstream Emscripten/WASM build; the generated WASM output stays build-generated and is ignored.
+- CLI non-WAV input is normalized by a direct `ffmpeg` subprocess into a temporary float WAV; no audio assets are committed.
 - The UI owns transient playback state; shared domain modules own arrangement data and scheduling calculations.
+- No repository design-system artifact exists yet; the requested Swiss treatment is implemented as the current local visual direction rather than asserted as an existing canonical token set.
 
 ## Progress
 - Git and Beads initialized; the project bead is `tunestretch-2k3`.
@@ -33,3 +37,7 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - `src/web/paulstretch.ts` loads the generated upstream Emscripten module; arrangement and sequencer policy remains in TypeScript.
 - `npm run build:core`, `npm run build:wasm`, upstream CTest, `npm test`, `npm run build`, native CLI smoke, and browser WASM preview/layer/sequence smoke all passed.
 - Upstream is GPL-2.0. Generated WASM is ignored and must be produced with `npm run build:wasm` before browser preview.
+- Current change bead: `tunestretch-di2`.
+- CLI now accepts `.mp3` and other non-WAV inputs through temporary ffmpeg normalization before upstream rendering.
+- Web source copy and file picker explicitly communicate MP3/WAV local support.
+- Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
