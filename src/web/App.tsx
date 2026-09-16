@@ -84,6 +84,7 @@ export function App() {
     sourceNodeRef.current?.stop();
     sourceNodeRef.current = null;
     setPlaying(false);
+    setStatus("Playback stopped.");
   }
 
   async function playPcm(audio: PcmAudio, label: string): Promise<void> {
@@ -129,21 +130,33 @@ export function App() {
   async function previewSelection(): Promise<void> {
     if (!source) return setStatus("Import a file before previewing.");
     setStatus("Rendering preview with upstream Paulstretch…");
-    await playPcm(await stretchWithPaulstretch(source, segment, params), "selected segment");
+    try {
+      await playPcm(await stretchWithPaulstretch(source, segment, params), "selected segment");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Preview failed.");
+    }
   }
 
   async function previewArrangement(): Promise<void> {
     if (!source) return setStatus("Import a file before playing layers.");
     if (!layers.length) return setStatus("Add at least one layer first.");
     setStatus("Rendering layers with upstream Paulstretch…");
-    await playPcm(await renderArrangementAsync(source, arrangement, stretchWithPaulstretch), `${layers.length} layers`);
+    try {
+      await playPcm(await renderArrangementAsync(source, arrangement, stretchWithPaulstretch), `${layers.length} layers`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Layer playback failed.");
+    }
   }
 
   async function previewSequence(): Promise<void> {
     if (!source || !activeSequencer) return setStatus("Add a sequence step first.");
     if (!activeSequencer.steps.length) return setStatus("Add a layer or nested sequence to the sequencer first.");
     setStatus("Rendering sequence with upstream Paulstretch…");
-    await playPcm(await renderSequencerAsync(source, arrangement, activeSequencer.id, stretchWithPaulstretch), activeSequencer.name);
+    try {
+      await playPcm(await renderSequencerAsync(source, arrangement, activeSequencer.id, stretchWithPaulstretch), activeSequencer.name);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
+    }
   }
 
   function updateParams(patch: Partial<StretchParams>): void {
@@ -209,27 +222,27 @@ export function App() {
         <div>
           <p className="eyebrow">LOCAL AUDIO LAB · 01</p>
           <h1>Tunestretch</h1>
-          <p className="hero-copy">Pull a moment out of a song. Stretch it until the grain becomes a landscape.</p>
         </div>
-        <div className="hero-mark" aria-hidden="true"><span>∿</span><span>∿</span><span>∿</span></div>
       </header>
 
       <section className="import-card panel">
         <div>
           <p className="section-kicker">Source</p>
-          <h2>{fileName || "Bring in a local file"}</h2>
-          <p className="muted">MP3, WAV, and browser-supported audio stay local. Nothing is uploaded.</p>
+          <h2>{fileName || "No file selected"}</h2>
         </div>
-        <label className="file-button">
-          Choose audio
-          <input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])} />
-        </label>
+        <div className="panel-actions">
+          <label className="file-button">
+            Choose audio
+            <input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])} />
+          </label>
+          <button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button>
+        </div>
         <div className="status" role="status" aria-live="polite">{status}</div>
       </section>
 
       <div className="workspace">
         <section className="panel controls-panel">
-          <div className="panel-heading"><div><p className="section-kicker">01 · Shape</p><h2>Stretch a segment</h2></div><span className="pill">{formatSeconds(duration)}</span></div>
+          <div className="panel-heading"><div><p className="section-kicker">01 · Shape</p><h2>Stretch a segment</h2></div><div className="panel-actions"><span className="pill">{formatSeconds(duration)}</span><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
           <div className="range-grid">
             <label>Start <input type="number" min="0" max={duration} step="0.01" value={segment.start} onChange={(event) => setSegment({ ...segment, start: Number(event.target.value) })} /></label>
             <label>End <input type="number" min="0.01" max={duration} step="0.01" value={segment.end} onChange={(event) => setSegment({ ...segment, end: Number(event.target.value) })} /></label>
@@ -245,9 +258,9 @@ export function App() {
         </section>
 
         <section className="panel arrangement-panel">
-          <div className="panel-heading"><div><p className="section-kicker">02 · Arrange</p><h2>Layer the drift</h2></div><button className="quiet-button" onClick={addLayer} disabled={!source}>+ Layer</button></div>
+          <div className="panel-heading"><div><p className="section-kicker">02 · Arrange</p><h2>Layers</h2></div><div className="panel-actions"><button className="quiet-button" onClick={addLayer} disabled={!source}>+ Layer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
           <div className="generator-row">
-            <div><strong>Generative pass</strong><span>Random segments, deterministic seed.</span></div>
+            <div><strong>Generate layers</strong></div>
             <label>Count <input type="number" min="1" max="12" value={generatedCount} onChange={(event) => setGeneratedCount(Number(event.target.value))} /></label>
             <label>Seed <input type="number" min="1" value={generatedSeed} onChange={(event) => setGeneratedSeed(Number(event.target.value))} /></label>
             <label className="toggle"><input type="checkbox" checked={generatedLinked} onChange={(event) => setGeneratedLinked(event.target.checked)} /> Linked</label>
@@ -274,7 +287,7 @@ export function App() {
       </div>
 
       <section className="panel sequencer-panel">
-        <div className="panel-heading"><div><p className="section-kicker">03 · Sequence</p><h2>Compose playback</h2></div><button className="quiet-button" onClick={addSequencer}>+ Sequencer</button></div>
+        <div className="panel-heading"><div><p className="section-kicker">03 · Sequence</p><h2>Sequence</h2></div><div className="panel-actions"><button className="quiet-button" onClick={addSequencer}>+ Sequencer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
         <div className="sequencer-toolbar"><label>Editing <select value={activeSequencerId} onChange={(event) => setActiveSequencerId(event.target.value)}>{sequencers.map((sequencer) => <option key={sequencer.id} value={sequencer.id}>{sequencer.name}</option>)}</select></label><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => activeSequencer && updateSequencer(activeSequencer.id, { name: event.target.value })} /></label><button className="quiet-button" onClick={() => addStep("layer")} disabled={!layers.length}>+ Layer step</button><button className="quiet-button" onClick={() => addStep("sequencer")} disabled={sequencers.length < 2}>+ Nested step</button><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button></div>
         <div className="sequence-list">
           {!activeSequencer?.steps.length && <div className="empty-state">Sequence steps can target layers or other sequencers, with repeats and gaps.</div>}
@@ -284,7 +297,6 @@ export function App() {
         </div>
       </section>
 
-      <footer><span>Tunestretch runs locally in your browser.</span><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop playback</button></footer>
     </main>
   );
 }
