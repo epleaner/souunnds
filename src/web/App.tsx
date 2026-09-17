@@ -480,14 +480,10 @@ export function App() {
           </div>
           <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Base length (s) <input type="number" min="0.05" max="60" step="0.05" value={activeSequencer?.baseLengthSeconds ?? 1} onChange={(event) => updateSequence({ baseLengthSeconds: Math.max(0.05, Math.min(60, Number(event.target.value))) })} /></label><label>Gap (s) <input type="number" min="0" max="60" step="0.05" value={activeSequencer?.gapLengthSeconds ?? 0} onChange={(event) => updateSequence({ gapLengthSeconds: Math.max(0, Math.min(60, Number(event.target.value))) })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label><label className="toggle sequence-loop">Loop layers <input type="checkbox" checked={activeSequencer?.loopLayers !== false} onChange={(event) => updateSequence({ loopLayers: event.target.checked })} /></label></div>
           <div className="sequence-matrix" aria-label="All sequences">
-            {sequencers.map((sequence, sequenceIndex) => {
+            {sequencers.map((sequence) => {
               const isActive = sequence.id === activeSequencer?.id;
               return (
                 <div className={`sequence-row ${isActive ? "is-active" : ""}`} key={sequence.id}>
-                  <button className="sequence-row-label" type="button" onClick={() => { setActiveSequencerId(sequence.id); setSelectedCellIndex(0); }} aria-label={`Select ${sequence.name}`} aria-pressed={isActive}>
-                    <span className="sequence-row-number">{String(sequenceIndex + 1).padStart(2, "0")}</span>
-                    <strong>{sequence.name}</strong>
-                  </button>
                   <div className="sequence-grid" aria-label={`${sequence.name} cells`}>
                     {!sequence.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
                     {sequence.steps.map((step, index) => {
@@ -498,7 +494,7 @@ export function App() {
                           <span className="sequence-cell-progress" style={{ width: `${(progress ?? 0) * 100}%` }} />
                           <button className="sequence-cell-edge" type="button" aria-label={`Resize ${sequence.name} cell ${index + 1} left edge`} onPointerDown={(event) => beginResize(event, sequence.id, index, "left")} onPointerMove={(event) => moveResize(event, index, "left")} onPointerUp={endResize} onPointerCancel={endResize} />
                           <button className="sequence-cell-main" type="button" onClick={() => { setActiveSequencerId(sequence.id); setSelectedCellIndex(index); }} aria-label={`${sequence.name} cell ${index + 1}, ${label}`} aria-pressed={isActive && index === selectedCellIndex}>
-                            <span className="sequence-cell-content"><span>{String(index + 1).padStart(2, "0")}</span><strong>{label}</strong></span>
+                            <span className="sequence-cell-content"><strong>{label}</strong></span>
                           </button>
                           <button className="sequence-cell-edge" type="button" aria-label={`Resize ${sequence.name} cell ${index + 1} right edge`} onPointerDown={(event) => beginResize(event, sequence.id, index, "right")} onPointerMove={(event) => moveResize(event, index, "right")} onPointerUp={endResize} onPointerCancel={endResize} />
                         </div>
