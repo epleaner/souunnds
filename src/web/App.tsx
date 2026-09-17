@@ -19,7 +19,7 @@ import {
 import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
 const MAIN_SEQUENCE_ID = "main-sequencer";
 
-type SequencePlayback = { tracks: Array<{ sequenceId: string; cellDurations: number[] }>; startedAt: number };
+type SequencePlayback = { tracks: Array<{ sequenceId: string; cellDurations: number[] }>; startedAt: number; simultaneous: boolean };
 type ResizeState = { sequenceId: string; index: number; edge: "left" | "right"; startX: number; initialLength: number; pixelsPerLength: number };
 
 function formatSeconds(seconds: number): string {
@@ -27,6 +27,22 @@ function formatSeconds(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
   return `${minutes}:${remainder}`;
+}
+function mixPcm(audios: PcmAudio[]): PcmAudio {
+  const first = audios[0];
+  if (!first) throw new Error("No sequences are available to play.");
+  const sampleCount = Math.max(...audios.map((audio) => audio.samples.length));
+  const samples = new Float32Array(sampleCount);
+  for (const audio of audios) {
+    for (let index = 0; index < audio.samples.length; index += 1) samples[index] += audio.samples[index];
+  }
+  let peak = 0;
+  for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+  if (peak > 0.98) {
+    const scale = 0.98 / peak;
+    for (let index = 0; index < samples.length; index += 1) samples[index] *= scale;
+  }
+  return { sampleRate: first.sampleRate, channels: first.channels, samples };
 }
 
 function createLayer(duration: number, index: number): Layer {
@@ -127,7 +143,7 @@ export function App() {
   const [status, setStatus] = useState("Import an audio file to begin.");
   const [playing, setPlaying] = useState(false);
   const [sequencePlayback, setSequencePlayback] = useState<SequencePlayback | null>(null);
-  const [sequenceProgress, setSequenceProgress] = useState<{ sequenceId: string; index: number; fraction: number } | null>(null);
+  const [sequenceProgress, setSequenceProgress] = useState<Array<{ sequenceId: string; index: number; fraction: number }>>([]);
   const arrangement = useMemo<Arrangement>(() => ({ layers, sequencers }), [layers, sequencers]);
   const activeSequencer = sequencers.find((sequence) => sequence.id === activeSequencerId) ?? sequencers[0];
   const selectedCell = activeSequencer?.steps[selectedCellIndex];
@@ -141,26 +157,33 @@ export function App() {
 
   useEffect(() => {
     if (!sequencePlayback) {
-      setSequenceProgress(null);
+      setSequenceProgress([]);
       return;
     }
     let frameId = 0;
-    const totalDuration = sequencePlayback.tracks.reduce((total, track) => total + track.cellDurations.reduce((sum, value) => sum + Math.max(0, value), 0), 0);
-    const lastTrack = sequencePlayback.tracks[sequencePlayback.tracks.length - 1];
+    const trackDuration = (track: SequencePlayback["tracks"][number]) => track.cellDurations.reduce((sum, value) => sum + Math.max(0, value), 0);
+    const totalDuration = sequencePlayback.simultaneous
+      ? Math.max(...sequencePlayback.tracks.map(trackDuration))
+      : sequencePlayback.tracks.reduce((total, track) => total + trackDuration(track), 0);
     const update = () => {
       const elapsed = (performance.now() - sequencePlayback.startedAt) / 1000;
       let cursor = 0;
-      let progress = { sequenceId: lastTrack?.sequenceId ?? "", index: Math.max(0, (lastTrack?.cellDurations.length ?? 1) - 1), fraction: 1 };
-      outer: for (const track of sequencePlayback.tracks) {
+      const progress = sequencePlayback.tracks.map((track) => {
+        const duration = trackDuration(track);
+        const trackElapsed = sequencePlayback.simultaneous ? elapsed : Math.max(0, elapsed - cursor);
+        let localCursor = 0;
+        let result = { sequenceId: track.sequenceId, index: Math.max(0, track.cellDurations.length - 1), fraction: 1 };
         for (let index = 0; index < track.cellDurations.length; index += 1) {
           const cellDuration = Math.max(0, track.cellDurations[index]);
-          if (elapsed < cursor + cellDuration || (cellDuration === 0 && elapsed <= cursor)) {
-            progress = { sequenceId: track.sequenceId, index, fraction: cellDuration ? Math.min(1, Math.max(0, (elapsed - cursor) / cellDuration)) : 1 };
-            break outer;
+          if (trackElapsed < localCursor + cellDuration || (cellDuration === 0 && trackElapsed <= localCursor)) {
+            result = { sequenceId: track.sequenceId, index, fraction: cellDuration ? Math.min(1, Math.max(0, (trackElapsed - localCursor) / cellDuration)) : 1 };
+            break;
           }
-          cursor += cellDuration;
+          localCursor += cellDuration;
         }
-      }
+        if (!sequencePlayback.simultaneous) cursor += duration;
+        return result;
+      });
       setSequenceProgress(progress);
       if (elapsed < totalDuration) frameId = requestAnimationFrame(update);
     };
@@ -180,7 +203,7 @@ export function App() {
     setSequencePlayback(null);
     setStatus("Playback stopped.");
   }
-  async function playPcm(audio: PcmAudio, label: string, sequenceTracks?: SequencePlayback["tracks"]): Promise<void> {
+  async function playPcm(audio: PcmAudio, label: string, sequenceTracks?: SequencePlayback["tracks"], simultaneous = false): Promise<void> {
     const context = ensureContext();
     await context.resume();
     stopPlayback();
@@ -198,7 +221,7 @@ export function App() {
     sourceNodeRef.current = node;
     node.start();
     setPlaying(true);
-    if (sequenceTracks) setSequencePlayback({ tracks: sequenceTracks, startedAt: performance.now() });
+    if (sequenceTracks) setSequencePlayback({ tracks: sequenceTracks, startedAt: performance.now(), simultaneous });
     setStatus(`Playing ${label} · ${formatSeconds(preparedAudio.samples.length / preparedAudio.channels / preparedAudio.sampleRate)}`);
   }
 
@@ -273,25 +296,17 @@ export function App() {
     const playableSequences = sequencers.filter((sequence) => sequence.steps.length);
     if (!playableSequences.length) return setStatus("Add a sequence cell first.");
     const playbackArrangement = arrangementForPlayback();
-    const allSequencerId = "__all-sequences__";
-    const combinedArrangement: Arrangement = {
-      ...playbackArrangement,
-      sequencers: [
-        ...playbackArrangement.sequencers,
-        {
-          id: allSequencerId,
-          name: "All sequences",
-          steps: playableSequences.map((sequence) => ({ targetId: sequence.id, targetType: "sequencer", repeats: 1, length: 1 })),
-        },
-      ],
-    };
     setStatus(`Rendering ${playableSequences.length} sequences with upstream Paulstretch…`);
     try {
+      const rendered: PcmAudio[] = [];
       const tracks = playableSequences.map((sequence) => ({
         sequenceId: sequence.id,
         cellDurations: sequenceCellDurations(source, playbackArrangement, sequence.id),
       }));
-      await playPcm(await renderSequencerAsync(source, combinedArrangement, allSequencerId, stretchForPlayback), `${playableSequences.length} sequences`, tracks);
+      for (const sequence of playableSequences) {
+        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback));
+      }
+      await playPcm(mixPcm(rendered), `${playableSequences.length} sequences`, tracks, true);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     }
@@ -518,8 +533,8 @@ export function App() {
                   <div className="sequence-grid" aria-label={`${sequence.name} cells`}>
                     {!sequence.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
                     {sequence.steps.map((step, index) => {
-                      const sequenceIsPlaying = sequenceProgress?.sequenceId === sequence.id;
-                      const progress = sequenceIsPlaying && sequenceProgress.index === index ? sequenceProgress.fraction : sequenceIsPlaying && index < sequenceProgress.index ? 1 : 0;
+                      const trackProgress = sequenceProgress.find((track) => track.sequenceId === sequence.id);
+                      const progress = trackProgress?.index === index ? trackProgress.fraction : trackProgress && index < trackProgress.index ? 1 : 0;
                       const label = layerNames.get(step.targetId) ?? "Unassigned";
                       return (
                         <div className={`sequence-cell ${isActive && index === selectedCellIndex ? "is-selected" : ""}`} key={`${sequence.id}-cell-${index}`} style={{ flex: `${Math.max(0.25, step.length)} 1 0` }}>
