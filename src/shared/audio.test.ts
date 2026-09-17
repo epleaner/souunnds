@@ -81,6 +81,32 @@ describe("audio core", () => {
     const enveloped = applyPlaybackAdsr(audio, { attackSeconds: 0.25, decaySeconds: 0.25, sustainLevel: 0.5, releaseSeconds: 0.25 });
     expect([...enveloped.samples]).toEqual([0, 1, 0.5, 0.5, 0.5, 0]);
   });
+  it("restarts playback ADSR for each sequence cell", async () => {
+    const audio: PcmAudio = { sampleRate: 4, channels: 1, samples: new Float32Array(8).fill(1) };
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        {
+          id: "main",
+          name: "Main",
+          baseLengthSeconds: 1,
+          steps: [
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 1 },
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 1 },
+          ],
+        },
+      ],
+    };
+    const rendered = await renderSequencerAsync(audio, arrangement, "main", async (input) => input, {
+      attackSeconds: 0.25,
+      decaySeconds: 0,
+      sustainLevel: 0.5,
+      releaseSeconds: 0.25,
+    });
+    expect([...rendered.samples]).toEqual([0, 0.5, 0.5, 0, 0, 0.5, 0.5, 0]);
+  });
 
   it("finds a non-silent window even when audio is sparse", () => {
     const samples = new Float32Array(1000);

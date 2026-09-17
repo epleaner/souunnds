@@ -19,6 +19,27 @@ export const DEFAULT_PLAYBACK_ADSR: PlaybackAdsr = {
   releaseSeconds: 0.12,
 };
 
+function playbackAdsrGain(
+  frame: number,
+  frames: number,
+  attackFrames: number,
+  decayFrames: number,
+  sustainLevel: number,
+  releaseFrames: number,
+): number {
+  let gain = sustainLevel;
+  if (attackFrames > 0 && frame < attackFrames) {
+    gain = frame / attackFrames;
+  } else if (decayFrames > 0 && frame < attackFrames + decayFrames) {
+    gain = 1 - ((1 - sustainLevel) * (frame - attackFrames)) / decayFrames;
+  }
+  const releaseStart = Math.max(0, frames - releaseFrames);
+  if (releaseFrames > 0 && frame >= releaseStart) {
+    gain *= Math.max(0, (frames - frame - 1) / releaseFrames);
+  }
+  return gain;
+}
+
 export function applyPlaybackAdsr(audio: PcmAudio, adsr: PlaybackAdsr): PcmAudio {
   const attackFrames = Math.max(0, Math.round(adsr.attackSeconds * audio.sampleRate));
   const decayFrames = Math.max(0, Math.round(adsr.decaySeconds * audio.sampleRate));
@@ -28,17 +49,8 @@ export function applyPlaybackAdsr(audio: PcmAudio, adsr: PlaybackAdsr): PcmAudio
 
   const frames = frameCount(audio);
   const output = new Float32Array(audio.samples.length);
-  const releaseStart = Math.max(0, frames - releaseFrames);
   for (let frame = 0; frame < frames; frame += 1) {
-    let gain = sustainLevel;
-    if (attackFrames > 0 && frame < attackFrames) {
-      gain = frame / attackFrames;
-    } else if (decayFrames > 0 && frame < attackFrames + decayFrames) {
-      gain = 1 - ((1 - sustainLevel) * (frame - attackFrames)) / decayFrames;
-    }
-    if (releaseFrames > 0 && frame >= releaseStart) {
-      gain *= Math.max(0, (frames - frame - 1) / releaseFrames);
-    }
+    const gain = playbackAdsrGain(frame, frames, attackFrames, decayFrames, sustainLevel, releaseFrames);
     for (let channel = 0; channel < audio.channels; channel += 1) {
       output[frame * audio.channels + channel] = audio.samples[frame * audio.channels + channel] * gain;
     }
@@ -398,8 +410,15 @@ function mixScheduledLayers(
   arrangement: Arrangement,
   schedule: ScheduledLayer[],
   rendered: Map<string, PcmAudio>,
+  adsr?: PlaybackAdsr,
 ): PcmAudio {
   const layerMap = new Map(arrangement.layers.map((layer) => [layer.id, layer]));
+  const envelope = adsr ? {
+    attackFrames: Math.max(0, Math.round(adsr.attackSeconds * audio.sampleRate)),
+    decayFrames: Math.max(0, Math.round(adsr.decaySeconds * audio.sampleRate)),
+    sustainLevel: Math.min(1, Math.max(0, adsr.sustainLevel)),
+    releaseFrames: Math.max(0, Math.round(adsr.releaseSeconds * audio.sampleRate)),
+  } : null;
   const totalFrames = schedule.reduce((longest, item) => {
     const clip = rendered.get(item.layerId);
     return clip
@@ -420,9 +439,12 @@ function mixScheduledLayers(
       const clipFrame = item.loop ? frame % clipFrames : frame;
       const outputFrame = startFrame + frame;
       if (outputFrame >= totalFrames) break;
+      const envelopeGain = envelope
+        ? playbackAdsrGain(frame, framesToMix, envelope.attackFrames, envelope.decayFrames, envelope.sustainLevel, envelope.releaseFrames)
+        : 1;
       for (let channel = 0; channel < audio.channels; channel += 1) {
         output[outputFrame * audio.channels + channel] +=
-          clip.samples[clipFrame * audio.channels + channel] * layer.gain;
+          clip.samples[clipFrame * audio.channels + channel] * layer.gain * envelopeGain;
       }
     }
   }
@@ -469,12 +491,13 @@ export function renderSequencer(
   arrangement: Arrangement,
   sequencerId: string,
   stretch: StretchFunction = stretchPcm,
+  adsr?: PlaybackAdsr,
 ): PcmAudio {
   const schedule = sequenceSchedule(audio, arrangement, sequencerId);
   const rendered = new Map(
     arrangement.layers.map((layer) => [layer.id, stretch(audio, layer.segment, layer.params)]),
   );
-  return mixScheduledLayers(audio, arrangement, schedule, rendered);
+  return mixScheduledLayers(audio, arrangement, schedule, rendered, adsr);
 }
 
 export async function renderSequencerAsync(
@@ -482,6 +505,7 @@ export async function renderSequencerAsync(
   arrangement: Arrangement,
   sequencerId: string,
   stretch: AsyncStretchFunction,
+  adsr?: PlaybackAdsr,
 ): Promise<PcmAudio> {
   const schedule = sequenceSchedule(audio, arrangement, sequencerId);
   const requiredLayerIds = new Set(schedule.map((item) => item.layerId));
@@ -489,7 +513,7 @@ export async function renderSequencerAsync(
   for (const layer of arrangement.layers) {
     if (requiredLayerIds.has(layer.id)) rendered.set(layer.id, await stretch(audio, layer.segment, layer.params));
   }
-  return mixScheduledLayers(audio, arrangement, schedule, rendered);
+  return mixScheduledLayers(audio, arrangement, schedule, rendered, adsr);
 }
 
 export function sourceSegmentRms(audio: PcmAudio, segment: Segment): number {

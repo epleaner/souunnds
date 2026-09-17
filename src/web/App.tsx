@@ -207,11 +207,17 @@ export function App() {
     setSequencePlayback(null);
     setStatus("Playback stopped.");
   }
-  async function playPcm(audio: PcmAudio, label: string, sequenceTracks?: SequencePlayback["tracks"], simultaneous = false): Promise<void> {
+  async function playPcm(
+    audio: PcmAudio,
+    label: string,
+    sequenceTracks?: SequencePlayback["tracks"],
+    simultaneous = false,
+    playbackAdsr: PlaybackAdsr | null = adsr,
+  ): Promise<void> {
     const context = ensureContext();
     await context.resume();
     stopPlayback();
-    const preparedAudio = applyPlaybackAdsr(audio, adsr);
+    const preparedAudio = playbackAdsr ? applyPlaybackAdsr(audio, playbackAdsr) : audio;
     const node = context.createBufferSource();
     node.buffer = audioBufferFromPcm(context, preparedAudio);
     node.connect(context.destination);
@@ -299,7 +305,7 @@ export function App() {
     try {
       const playbackArrangement = arrangementForPlayback();
       const cellDurations = sequenceCellDurations(source, playbackArrangement, activeSequencer.id);
-      await playPcm(await renderSequencerAsync(source, playbackArrangement, activeSequencer.id, stretchForPlayback), activeSequencer.name, [{ sequenceId: activeSequencer.id, cellDurations }]);
+      await playPcm(await renderSequencerAsync(source, playbackArrangement, activeSequencer.id, stretchForPlayback, adsr), activeSequencer.name, [{ sequenceId: activeSequencer.id, cellDurations }], false, null);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     } finally {
@@ -320,9 +326,9 @@ export function App() {
         cellDurations: sequenceCellDurations(source, playbackArrangement, sequence.id),
       }));
       for (const sequence of playableSequences) {
-        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback));
+        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback, adsr));
       }
-      await playPcm(mixPcm(rendered), `${playableSequences.length} sequences`, tracks, true);
+      await playPcm(mixPcm(rendered), `${playableSequences.length} sequences`, tracks, true, null);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     } finally {
