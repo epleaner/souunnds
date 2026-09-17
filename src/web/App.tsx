@@ -131,6 +131,7 @@ export function App() {
   const arrangement = useMemo<Arrangement>(() => ({ layers, sequencers }), [layers, sequencers]);
   const activeSequencer = sequencers.find((sequence) => sequence.id === activeSequencerId) ?? sequencers[0];
   const selectedCell = activeSequencer?.steps[selectedCellIndex];
+  const [activePanel, setActivePanel] = useState<"layers" | "sequence">("layers");
   const [adsr, setAdsr] = useState<PlaybackAdsr>({ ...DEFAULT_PLAYBACK_ADSR });
   const contextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
@@ -428,9 +429,13 @@ export function App() {
           </div>
         </div>
       </section>
-
       <div className="studio">
-        <section className="panel layers-panel">
+        <div className="studio-tabs" role="tablist" aria-label="Workspace panels">
+          <button id="layers-tab" type="button" role="tab" aria-controls="layers-panel" aria-selected={activePanel === "layers"} className={activePanel === "layers" ? "is-active" : ""} onClick={() => setActivePanel("layers")}>Layers</button>
+          <button id="sequence-tab" type="button" role="tab" aria-controls="sequence-panel" aria-selected={activePanel === "sequence"} className={activePanel === "sequence" ? "is-active" : ""} onClick={() => setActivePanel("sequence")}>Sequence</button>
+        </div>
+        {activePanel === "layers" && (
+        <section id="layers-panel" role="tabpanel" aria-labelledby="layers-tab" className="panel layers-panel">
           <div className="panel-heading"><div><p className="section-kicker">01 · Layers</p><h2>Layers</h2></div><div className="panel-actions"><button className="quiet-button" onClick={addLayer} disabled={!source}>+ Layer</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
           <div className="generator-row">
             <div><strong>Generate layers</strong></div>
@@ -458,8 +463,9 @@ export function App() {
           </div>
           <button className="primary-button" onClick={() => void previewArrangement()} disabled={!source || !layers.length}>Play layers together</button>
         </section>
-
-        <section className="panel sequence-panel">
+        )}
+        {activePanel === "sequence" && (
+        <section id="sequence-panel" role="tabpanel" aria-labelledby="sequence-tab" className="panel sequence-panel">
           <div className="panel-heading"><div><p className="section-kicker">02 · Sequence</p><h2>Sequence</h2></div><div className="panel-actions"><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
           <div className="sequence-library">
             <label>Sequence <select aria-label="Active sequence" value={activeSequencer?.id ?? ""} onChange={(event) => { setActiveSequencerId(event.target.value); setSelectedCellIndex(0); }}>{sequencers.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}</select></label>
@@ -496,6 +502,7 @@ export function App() {
             </div>
           ) : null}
         </section>
+        )}
       </div>
     </main>
   );
