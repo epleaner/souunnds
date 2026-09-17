@@ -20,7 +20,7 @@ import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
 const MAIN_SEQUENCE_ID = "main-sequencer";
 
 type SequencePlayback = { cellDurations: number[]; startedAt: number };
-type ResizeState = { index: number; edge: "left" | "right"; startX: number; initialLength: number; pixelsPerLength: number };
+type ResizeState = { sequenceId: string; index: number; edge: "left" | "right"; startX: number; initialLength: number; pixelsPerLength: number };
 
 function formatSeconds(seconds: number): string {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -353,10 +353,13 @@ export function App() {
     setSelectedCellIndex((current) => Math.min(current, count - 1));
   }
 
-  function updateStep(index: number, patch: Partial<SequenceStep>): void {
-    updateSequence({
-      steps: activeSequencer?.steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)) ?? [],
-    });
+  function updateStep(index: number, patch: Partial<SequenceStep>, sequenceId = activeSequencer?.id): void {
+    if (!sequenceId) return;
+    setSequencers((current) => current.map((sequence) => (
+      sequence.id === sequenceId
+        ? { ...sequence, steps: sequence.steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)) }
+        : sequence
+    )));
   }
 
 
@@ -366,20 +369,23 @@ export function App() {
     setSelectedCellIndex((current) => Math.min(current, activeSequencer.steps.length - 2));
   }
 
-  function beginResize(event: ReactPointerEvent<HTMLButtonElement>, index: number, edge: "left" | "right"): void {
-    const step = activeSequencer?.steps[index];
+  function beginResize(event: ReactPointerEvent<HTMLButtonElement>, sequenceId: string, index: number, edge: "left" | "right"): void {
+    const sequence = sequencers.find((item) => item.id === sequenceId);
+    const step = sequence?.steps[index];
     const cell = event.currentTarget.parentElement;
     if (!step || !cell) return;
     const width = cell.getBoundingClientRect().width;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     resizeRef.current = {
+      sequenceId,
       index,
       edge,
       startX: event.clientX,
       initialLength: Math.max(0.25, step.length),
       pixelsPerLength: width / Math.max(0.25, step.length),
     };
+    setActiveSequencerId(sequenceId);
     setSelectedCellIndex(index);
   }
 
@@ -388,7 +394,7 @@ export function App() {
     if (!resize || resize.index !== index || resize.edge !== edge) return;
     const delta = (event.clientX - resize.startX) / Math.max(1, resize.pixelsPerLength);
     const length = Math.max(0.25, Math.min(16, resize.initialLength + (edge === "right" ? delta : -delta)));
-    updateStep(index, { length: Math.round(length * 4) / 4 });
+    updateStep(index, { length: Math.round(length * 4) / 4 }, resize.sequenceId);
   }
 
   function endResize(event: ReactPointerEvent<HTMLButtonElement>): void {
@@ -467,25 +473,38 @@ export function App() {
         <section id="sequence-panel" role="tabpanel" aria-labelledby="sequence-tab" className="panel sequence-panel">
           <div className="panel-heading"><div><p className="section-kicker">02 · Sequence</p><h2>Sequence</h2></div><div className="panel-actions"><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
           <div className="sequence-library">
-            <label>Sequence <select aria-label="Active sequence" value={activeSequencer?.id ?? ""} onChange={(event) => { setActiveSequencerId(event.target.value); setSelectedCellIndex(0); }}>{sequencers.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}</select></label>
+            <strong className="sequence-library-label">Sequences</strong>
             <button className="quiet-button" type="button" onClick={addSequence}>+ Sequence</button>
             <button className="quiet-button" type="button" onClick={randomizeSequence} disabled={!activeSequencer?.steps.length || !layers.length}>Randomize</button>
             <button className="icon-button" type="button" onClick={removeActiveSequence} disabled={sequencers.length <= 1} aria-label="Remove active sequence">×</button>
           </div>
           <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Base length (s) <input type="number" min="0.05" max="60" step="0.05" value={activeSequencer?.baseLengthSeconds ?? 1} onChange={(event) => updateSequence({ baseLengthSeconds: Math.max(0.05, Math.min(60, Number(event.target.value))) })} /></label><label>Gap (s) <input type="number" min="0" max="60" step="0.05" value={activeSequencer?.gapLengthSeconds ?? 0} onChange={(event) => updateSequence({ gapLengthSeconds: Math.max(0, Math.min(60, Number(event.target.value))) })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label><label className="toggle sequence-loop">Loop layers <input type="checkbox" checked={activeSequencer?.loopLayers !== false} onChange={(event) => updateSequence({ loopLayers: event.target.checked })} /></label></div>
-          <div className="sequence-grid" aria-label="Sequence cells">
-            {!activeSequencer?.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
-            {activeSequencer?.steps.map((step, index) => {
-              const progress = sequenceProgress?.index === index ? sequenceProgress.fraction : sequenceProgress && index < sequenceProgress.index ? 1 : 0;
-              const label = layerNames.get(step.targetId) ?? "Unassigned";
+          <div className="sequence-matrix" aria-label="All sequences">
+            {sequencers.map((sequence, sequenceIndex) => {
+              const isActive = sequence.id === activeSequencer?.id;
               return (
-                <div className={`sequence-cell ${index === selectedCellIndex ? "is-selected" : ""}`} key={`${activeSequencer.id}-cell-${index}`} style={{ flex: `${Math.max(0.25, step.length)} 1 0` }}>
-                  <span className="sequence-cell-progress" style={{ width: `${(progress ?? 0) * 100}%` }} />
-                  <button className="sequence-cell-edge" type="button" aria-label={`Resize cell ${index + 1} left edge`} onPointerDown={(event) => beginResize(event, index, "left")} onPointerMove={(event) => moveResize(event, index, "left")} onPointerUp={endResize} onPointerCancel={endResize} />
-                  <button className="sequence-cell-main" type="button" onClick={() => setSelectedCellIndex(index)} aria-label={`Cell ${index + 1}, ${label}`} aria-pressed={index === selectedCellIndex}>
-                    <span className="sequence-cell-content"><span>{String(index + 1).padStart(2, "0")}</span><strong>{label}</strong></span>
+                <div className={`sequence-row ${isActive ? "is-active" : ""}`} key={sequence.id}>
+                  <button className="sequence-row-label" type="button" onClick={() => { setActiveSequencerId(sequence.id); setSelectedCellIndex(0); }} aria-label={`Select ${sequence.name}`} aria-pressed={isActive}>
+                    <span className="sequence-row-number">{String(sequenceIndex + 1).padStart(2, "0")}</span>
+                    <strong>{sequence.name}</strong>
                   </button>
-                  <button className="sequence-cell-edge" type="button" aria-label={`Resize cell ${index + 1} right edge`} onPointerDown={(event) => beginResize(event, index, "right")} onPointerMove={(event) => moveResize(event, index, "right")} onPointerUp={endResize} onPointerCancel={endResize} />
+                  <div className="sequence-grid" aria-label={`${sequence.name} cells`}>
+                    {!sequence.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
+                    {sequence.steps.map((step, index) => {
+                      const progress = isActive && sequenceProgress?.index === index ? sequenceProgress.fraction : isActive && sequenceProgress && index < sequenceProgress.index ? 1 : 0;
+                      const label = layerNames.get(step.targetId) ?? "Unassigned";
+                      return (
+                        <div className={`sequence-cell ${isActive && index === selectedCellIndex ? "is-selected" : ""}`} key={`${sequence.id}-cell-${index}`} style={{ flex: `${Math.max(0.25, step.length)} 1 0` }}>
+                          <span className="sequence-cell-progress" style={{ width: `${(progress ?? 0) * 100}%` }} />
+                          <button className="sequence-cell-edge" type="button" aria-label={`Resize ${sequence.name} cell ${index + 1} left edge`} onPointerDown={(event) => beginResize(event, sequence.id, index, "left")} onPointerMove={(event) => moveResize(event, index, "left")} onPointerUp={endResize} onPointerCancel={endResize} />
+                          <button className="sequence-cell-main" type="button" onClick={() => { setActiveSequencerId(sequence.id); setSelectedCellIndex(index); }} aria-label={`${sequence.name} cell ${index + 1}, ${label}`} aria-pressed={isActive && index === selectedCellIndex}>
+                            <span className="sequence-cell-content"><span>{String(index + 1).padStart(2, "0")}</span><strong>{label}</strong></span>
+                          </button>
+                          <button className="sequence-cell-edge" type="button" aria-label={`Resize ${sequence.name} cell ${index + 1} right edge`} onPointerDown={(event) => beginResize(event, sequence.id, index, "right")} onPointerMove={(event) => moveResize(event, index, "right")} onPointerUp={endResize} onPointerCancel={endResize} />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
