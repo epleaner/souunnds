@@ -87,7 +87,7 @@ function hasSignal(audio: PcmAudio): boolean {
 async function stretchForPlayback(audio: PcmAudio, segment: Layer["segment"], params: Layer["params"]): Promise<PcmAudio> {
   try {
     const rendered = await stretchWithPaulstretch(audio, segment, params);
-    if (hasSignal(rendered) || sourceSegmentRms(audio, segment) > 1e-8) return rendered;
+    if (hasSignal(rendered)) return rendered;
   } catch {
     // Retry generated/legacy values with a bounded, audible fallback below.
   }
