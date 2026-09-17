@@ -479,6 +479,42 @@ export async function renderSequencerAsync(
   return mixScheduledLayers(audio, arrangement, schedule, rendered);
 }
 
+export function sourceSegmentRms(audio: PcmAudio, segment: Segment): number {
+  const sourceFrames = frameCount(audio);
+  const startFrame = Math.max(0, Math.min(sourceFrames, Math.floor(Math.min(segment.start, segment.end) * audio.sampleRate)));
+  const endFrame = Math.max(startFrame + 1, Math.min(sourceFrames, Math.ceil(Math.max(segment.start, segment.end) * audio.sampleRate)));
+  const segmentFrames = endFrame - startFrame;
+  if (!segmentFrames) return 0;
+  const step = Math.max(1, Math.floor(segmentFrames / 64));
+  let energy = 0;
+  let count = 0;
+  for (let frame = 0; frame < segmentFrames; frame += step) {
+    for (let channel = 0; channel < audio.channels; channel += 1) {
+      const sample = audio.samples[(startFrame + frame) * audio.channels + channel];
+      energy += sample * sample;
+      count += 1;
+    }
+  }
+  return count ? energy / count : 0;
+}
+
+export function findAudibleStart(audio: PcmAudio, lengthSeconds: number): number {
+  const sourceFrames = frameCount(audio);
+  const segmentFrames = Math.max(1, Math.min(sourceFrames, Math.ceil(lengthSeconds * audio.sampleRate)));
+  const maxStart = Math.max(0, sourceFrames - segmentFrames);
+  let bestStart = 0;
+  let bestEnergy = -1;
+  for (let attempt = 0; attempt <= 128; attempt += 1) {
+    const start = Math.floor((attempt / 128) * maxStart);
+    const energy = sourceSegmentRms(audio, { start: start / audio.sampleRate, end: (start + segmentFrames) / audio.sampleRate });
+    if (energy > bestEnergy) {
+      bestStart = start;
+      bestEnergy = energy;
+    }
+  }
+  return bestStart / audio.sampleRate;
+}
+
 function audibleStart(
   audio: PcmAudio,
   lengthSeconds: number,
@@ -487,24 +523,14 @@ function audibleStart(
   const sourceFrames = frameCount(audio);
   const segmentFrames = Math.max(1, Math.min(sourceFrames, Math.ceil(lengthSeconds * audio.sampleRate)));
   const maxStart = Math.max(0, sourceFrames - segmentFrames);
-  let bestStart = 0;
-  let bestEnergy = -1;
+  let bestStart = Math.floor(findAudibleStart(audio, lengthSeconds) * audio.sampleRate);
+  let bestEnergy = sourceSegmentRms(audio, { start: bestStart / audio.sampleRate, end: (bestStart + segmentFrames) / audio.sampleRate });
   for (let attempt = 0; attempt < 64; attempt += 1) {
     const start = Math.floor(random() * (maxStart + 1));
-    const step = Math.max(1, Math.floor(segmentFrames / 64));
-    let energy = 0;
-    let count = 0;
-    for (let frame = 0; frame < segmentFrames; frame += step) {
-      for (let channel = 0; channel < audio.channels; channel += 1) {
-        const sample = audio.samples[(start + frame) * audio.channels + channel];
-        energy += sample * sample;
-        count += 1;
-      }
-    }
-    const rms = count ? energy / count : 0;
-    if (rms > bestEnergy) {
+    const energy = sourceSegmentRms(audio, { start: start / audio.sampleRate, end: (start + segmentFrames) / audio.sampleRate });
+    if (energy > bestEnergy) {
       bestStart = start;
-      bestEnergy = rms;
+      bestEnergy = energy;
     }
   }
   return bestStart / audio.sampleRate;

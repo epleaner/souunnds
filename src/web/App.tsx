@@ -7,6 +7,8 @@ import {
   renderArrangementAsync,
   renderSequencerAsync,
   sequenceCellDurations,
+  findAudibleStart,
+  sourceSegmentRms,
   type Arrangement,
   type Layer,
   type PcmAudio,
@@ -62,6 +64,20 @@ function audioBufferFromPcm(context: AudioContext, audio: PcmAudio): AudioBuffer
     }
   }
   return buffer;
+}
+function repairGeneratedLayers(audio: PcmAudio, layers: Layer[]): { layers: Layer[]; changed: boolean } {
+  const sourceDuration = audio.samples.length / audio.channels / audio.sampleRate;
+  let changed = false;
+  const repaired = layers.map((layer) => {
+    if (!layer.name.toLowerCase().startsWith("generated layer") || sourceSegmentRms(audio, layer.segment) > 1e-8) return layer;
+    const length = Math.max(0.15, layer.segment.end - layer.segment.start);
+    const start = findAudibleStart(audio, length);
+    const end = Math.min(sourceDuration, start + length);
+    if (start === layer.segment.start || end <= start) return layer;
+    changed = true;
+    return { ...layer, segment: { start, end } };
+  });
+  return { layers: repaired, changed };
 }
 
 export function App() {
@@ -175,12 +191,22 @@ export function App() {
       setStatus(error instanceof Error ? error.message : "Could not load that file or the upstream WASM core.");
     }
   }
+  function arrangementForPlayback(): Arrangement {
+    if (!source) return arrangement;
+    const repaired = repairGeneratedLayers(source, layers);
+    if (!repaired.changed) return arrangement;
+    setLayers(repaired.layers);
+    setStatus("Moved silent generated layers to audible source regions.");
+    return { ...arrangement, layers: repaired.layers };
+  }
 
   async function previewLayer(layer: Layer): Promise<void> {
     if (!source) return setStatus("Import a file before previewing.");
-    setStatus(`Rendering ${layer.name} with upstream Paulstretch…`);
+    const playbackArrangement = arrangementForPlayback();
+    const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
+    setStatus(`Rendering ${playableLayer.name} with upstream Paulstretch…`);
     try {
-      await playPcm(await stretchWithPaulstretch(source, layer.segment, layer.params), layer.name);
+      await playPcm(await stretchWithPaulstretch(source, playableLayer.segment, playableLayer.params), playableLayer.name);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Layer preview failed.");
     }
@@ -189,9 +215,10 @@ export function App() {
   async function previewArrangement(): Promise<void> {
     if (!source) return setStatus("Import a file before playing layers.");
     if (!layers.length) return setStatus("Add at least one layer first.");
+    const playbackArrangement = arrangementForPlayback();
     setStatus("Rendering layers with upstream Paulstretch…");
     try {
-      await playPcm(await renderArrangementAsync(source, arrangement, stretchWithPaulstretch), `${layers.length} layers`);
+      await playPcm(await renderArrangementAsync(source, playbackArrangement, stretchWithPaulstretch), `${layers.length} layers`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Layer playback failed.");
     }
@@ -199,10 +226,11 @@ export function App() {
 
   async function previewSequence(): Promise<void> {
     if (!source || !activeSequencer?.steps.length) return setStatus("Add a sequence cell first.");
+    const playbackArrangement = arrangementForPlayback();
     setStatus("Rendering sequence with upstream Paulstretch…");
     try {
-      const cellDurations = sequenceCellDurations(source, arrangement, MAIN_SEQUENCE_ID);
-      await playPcm(await renderSequencerAsync(source, arrangement, MAIN_SEQUENCE_ID, stretchWithPaulstretch), activeSequencer.name, cellDurations);
+      const cellDurations = sequenceCellDurations(source, playbackArrangement, MAIN_SEQUENCE_ID);
+      await playPcm(await renderSequencerAsync(source, playbackArrangement, MAIN_SEQUENCE_ID, stretchWithPaulstretch), activeSequencer.name, cellDurations);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     }

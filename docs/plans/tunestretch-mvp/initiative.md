@@ -51,3 +51,5 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Generated layer placement now samples source energy to avoid selecting silent regions when audio is available.
 - Playback uses solid red sequence fills, contiguous edge-to-edge cells, and a global ADSR envelope applied before Web Audio playback.
 - Sequence rendering loops a layer's rendered clip when a cell's relative duration exceeds the clip duration.
+- Silent playback repair bead: `tunestretch-jow`.
+- Generated placement scans deterministic source windows; legacy generated layers are relocated to the best audible window before layer, arrangement, or sequence playback.

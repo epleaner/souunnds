@@ -5,9 +5,11 @@ import {
   decodeWav,
   encodeWav,
   generateArrangement,
+  findAudibleStart,
   renderArrangement,
   renderSequencerAsync,
   scheduleSequencer,
+  sourceSegmentRms,
   stretchPcm,
   type Arrangement,
   type PcmAudio,
@@ -78,6 +80,14 @@ describe("audio core", () => {
     const audio: PcmAudio = { sampleRate: 4, channels: 1, samples: new Float32Array([1, 1, 1, 1, 1, 1]) };
     const enveloped = applyPlaybackAdsr(audio, { attackSeconds: 0.25, decaySeconds: 0.25, sustainLevel: 0.5, releaseSeconds: 0.25 });
     expect([...enveloped.samples]).toEqual([0, 1, 0.5, 0.5, 0.5, 0]);
+  });
+
+  it("finds a non-silent window even when audio is sparse", () => {
+    const samples = new Float32Array(1000);
+    samples.fill(1, 800, 900);
+    const source = { sampleRate: 100, channels: 1, samples };
+    const start = findAudibleStart(source, 0.5);
+    expect(sourceSegmentRms(source, { start, end: start + 0.5 })).toBeGreaterThan(0);
   });
   it("schedules nested sequencers in order", () => {
     const arrangement: Arrangement = {
