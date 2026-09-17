@@ -28,17 +28,6 @@ function formatSeconds(seconds: number): string {
   const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
   return `${minutes}:${remainder}`;
 }
-function concatPcm(audios: PcmAudio[]): PcmAudio {
-  const first = audios[0];
-  if (!first) throw new Error("No sequences are available to play.");
-  const samples = new Float32Array(audios.reduce((total, audio) => total + audio.samples.length, 0));
-  let offset = 0;
-  for (const audio of audios) {
-    samples.set(audio.samples, offset);
-    offset += audio.samples.length;
-  }
-  return { sampleRate: first.sampleRate, channels: first.channels, samples };
-}
 
 function createLayer(duration: number, index: number): Layer {
   return {
@@ -284,15 +273,25 @@ export function App() {
     const playableSequences = sequencers.filter((sequence) => sequence.steps.length);
     if (!playableSequences.length) return setStatus("Add a sequence cell first.");
     const playbackArrangement = arrangementForPlayback();
+    const allSequencerId = "__all-sequences__";
+    const combinedArrangement: Arrangement = {
+      ...playbackArrangement,
+      sequencers: [
+        ...playbackArrangement.sequencers,
+        {
+          id: allSequencerId,
+          name: "All sequences",
+          steps: playableSequences.map((sequence) => ({ targetId: sequence.id, targetType: "sequencer", repeats: 1, length: 1 })),
+        },
+      ],
+    };
     setStatus(`Rendering ${playableSequences.length} sequences with upstream Paulstretch…`);
     try {
-      const rendered: PcmAudio[] = [];
-      const tracks: SequencePlayback["tracks"] = [];
-      for (const sequence of playableSequences) {
-        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback));
-        tracks.push({ sequenceId: sequence.id, cellDurations: sequenceCellDurations(source, playbackArrangement, sequence.id) });
-      }
-      await playPcm(concatPcm(rendered), `${playableSequences.length} sequences`, tracks);
+      const tracks = playableSequences.map((sequence) => ({
+        sequenceId: sequence.id,
+        cellDurations: sequenceCellDurations(source, playbackArrangement, sequence.id),
+      }));
+      await playPcm(await renderSequencerAsync(source, combinedArrangement, allSequencerId, stretchForPlayback), `${playableSequences.length} sequences`, tracks);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     }
