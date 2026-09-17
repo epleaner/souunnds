@@ -28,6 +28,9 @@ function formatSeconds(seconds: number): string {
   const remainder = Math.floor(seconds % 60).toString().padStart(2, "0");
   return `${minutes}:${remainder}`;
 }
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+}
 function mixPcm(audios: PcmAudio[]): PcmAudio {
   const first = audios[0];
   if (!first) throw new Error("No sequences are available to play.");
@@ -141,6 +144,7 @@ export function App() {
   const [generatedSeed, setGeneratedSeed] = useState(23);
   const [generatedLinked, setGeneratedLinked] = useState(true);
   const [status, setStatus] = useState("Import an audio file to begin.");
+  const [processing, setProcessing] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [sequencePlayback, setSequencePlayback] = useState<SequencePlayback | null>(null);
   const [sequenceProgress, setSequenceProgress] = useState<Array<{ sequenceId: string; index: number; fraction: number }>>([]);
@@ -255,39 +259,51 @@ export function App() {
     return { ...arrangement, layers: repaired.layers };
   }
 
+  async function beginProcessing(message: string): Promise<void> {
+    setProcessing(message);
+    setStatus(message);
+    await nextPaint();
+  }
+
   async function previewLayer(layer: Layer): Promise<void> {
     if (!source) return setStatus("Import a file before previewing.");
-    const playbackArrangement = arrangementForPlayback();
-    const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
-    setStatus(`Rendering ${playableLayer.name} with upstream Paulstretch…`);
+    await beginProcessing(`Rendering ${layer.name} with upstream Paulstretch…`);
     try {
+      const playbackArrangement = arrangementForPlayback();
+      const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
       await playPcm(await stretchForPlayback(source, playableLayer.segment, playableLayer.params), playableLayer.name);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Layer preview failed.");
+    } finally {
+      setProcessing(null);
     }
   }
 
   async function previewArrangement(): Promise<void> {
     if (!source) return setStatus("Import a file before playing layers.");
     if (!layers.length) return setStatus("Add at least one layer first.");
-    const playbackArrangement = arrangementForPlayback();
-    setStatus("Rendering layers with upstream Paulstretch…");
+    await beginProcessing("Rendering layers with upstream Paulstretch…");
     try {
+      const playbackArrangement = arrangementForPlayback();
       await playPcm(await renderArrangementAsync(source, playbackArrangement, stretchForPlayback), `${layers.length} layers`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Layer playback failed.");
+    } finally {
+      setProcessing(null);
     }
   }
 
   async function previewSequence(): Promise<void> {
     if (!source || !activeSequencer?.steps.length) return setStatus("Add a sequence cell first.");
-    const playbackArrangement = arrangementForPlayback();
-    setStatus("Rendering sequence with upstream Paulstretch…");
+    await beginProcessing("Rendering sequence with upstream Paulstretch…");
     try {
+      const playbackArrangement = arrangementForPlayback();
       const cellDurations = sequenceCellDurations(source, playbackArrangement, activeSequencer.id);
       await playPcm(await renderSequencerAsync(source, playbackArrangement, activeSequencer.id, stretchForPlayback), activeSequencer.name, [{ sequenceId: activeSequencer.id, cellDurations }]);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
+    } finally {
+      setProcessing(null);
     }
   }
 
@@ -295,9 +311,9 @@ export function App() {
     if (!source) return setStatus("Import a file before playing sequences.");
     const playableSequences = sequencers.filter((sequence) => sequence.steps.length);
     if (!playableSequences.length) return setStatus("Add a sequence cell first.");
-    const playbackArrangement = arrangementForPlayback();
-    setStatus(`Rendering ${playableSequences.length} sequences with upstream Paulstretch…`);
+    await beginProcessing(`Rendering ${playableSequences.length} sequences with upstream Paulstretch…`);
     try {
+      const playbackArrangement = arrangementForPlayback();
       const rendered: PcmAudio[] = [];
       const tracks = playableSequences.map((sequence) => ({
         sequenceId: sequence.id,
@@ -309,6 +325,8 @@ export function App() {
       await playPcm(mixPcm(rendered), `${playableSequences.length} sequences`, tracks, true);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
+    } finally {
+      setProcessing(null);
     }
   }
 
@@ -565,6 +583,13 @@ export function App() {
         </section>
         )}
       </div>
+      {processing && (
+        <div className="processing-footer" role="status" aria-live="polite">
+          <span className="processing-footer-label">Processing</span>
+          <span>{processing}</span>
+          <span className="processing-construction" aria-hidden="true">CONSTRUCTION <strong>&gt;&gt;&gt;</strong></span>
+        </div>
+      )}
     </main>
   );
 }
