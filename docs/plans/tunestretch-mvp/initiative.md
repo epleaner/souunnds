@@ -37,7 +37,7 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - `src/web/paulstretch.ts` loads the generated upstream Emscripten module; arrangement and sequencer policy remains in TypeScript.
 - `npm run build:core`, `npm run build:wasm`, upstream CTest, `npm test`, `npm run build`, native CLI smoke, and browser WASM preview/layer/sequence smoke all passed.
 - Upstream is GPL-2.0. Generated WASM is ignored and must be produced with `npm run build:wasm` before browser preview.
-- Current change bead: `tunestretch-1pv`.
+- Current change bead: `tunestretch-ebm`.
 - CLI now accepts `.mp3` and other non-WAV inputs through temporary ffmpeg normalization before upstream rendering.
 - Web source copy and file picker explicitly communicate MP3/WAV local support.
 - Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
@@ -64,4 +64,4 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - The Sequence panel now renders every sequence as a selectable row in a 2D matrix; selecting a row preserves the existing active-sequence toolbar and inspector editing flow.
 - Sequence matrix cleanup removes visible sequence label cells and cell indices, uses layer names as cell content, and removes row/cell padding for a continuous matrix.
 - Sequence playback now includes a Play all control that renders and mixes every non-empty sequence from a shared start time, with independent progress tracking for each row.
-- Play and preview actions now show the render status over animated black-and-yellow construction stripes; a double animation-frame yield lets the browser paint it before synchronous WASM rendering begins.
+- Play and preview actions now show the render status over a compact, bottom-anchored footer with faint animated black-and-yellow construction stripes; a double animation-frame yield lets the browser paint it before synchronous WASM rendering begins.
