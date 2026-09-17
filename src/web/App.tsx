@@ -587,7 +587,6 @@ export function App() {
         <div className="processing-footer" role="status" aria-live="polite">
           <span className="processing-footer-label">Processing</span>
           <span>{processing}</span>
-          <span className="processing-construction" aria-hidden="true">CONSTRUCTION <strong>&gt;&gt;&gt;</strong></span>
         </div>
       )}
     </main>

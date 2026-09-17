@@ -64,5 +64,4 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - The Sequence panel now renders every sequence as a selectable row in a 2D matrix; selecting a row preserves the existing active-sequence toolbar and inspector editing flow.
 - Sequence matrix cleanup removes visible sequence label cells and cell indices, uses layer names as cell content, and removes row/cell padding for a continuous matrix.
 - Sequence playback now includes a Play all control that renders and mixes every non-empty sequence from a shared start time, with independent progress tracking for each row.
-- Play and preview actions now show a small animated CONSTRUCTION >>> footer; a double animation-frame yield lets the browser paint it before synchronous WASM rendering begins.
-- Processing feedback now uses animated black-and-yellow construction hazard stripes on the footer edges.
+- Play and preview actions now show the render status over animated black-and-yellow construction stripes; a double animation-frame yield lets the browser paint it before synchronous WASM rendering begins.
