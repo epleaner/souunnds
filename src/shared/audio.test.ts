@@ -95,13 +95,13 @@ describe("audio core", () => {
         { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
-        { id: "child", name: "Child", steps: [{ targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0.5, length: 1 }] },
-        { id: "main", name: "Main", steps: [{ targetId: "child", targetType: "sequencer", repeats: 2, gapSeconds: 1, length: 1 }] },
+        { id: "child", name: "Child", steps: [{ targetId: "layer", targetType: "layer", repeats: 1, length: 1 }] },
+        { id: "main", name: "Main", gapLengthSeconds: 1, steps: [{ targetId: "child", targetType: "sequencer", repeats: 2, length: 1 }] },
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
-      { layerId: "layer", startSeconds: 0, durationSeconds: 1 },
-      { layerId: "layer", startSeconds: 2.5, durationSeconds: 1 },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 1, loop: true },
+      { layerId: "layer", startSeconds: 2, durationSeconds: 1, loop: true },
     ]);
   });
 
@@ -115,15 +115,15 @@ describe("audio core", () => {
           id: "main",
           name: "Main",
           steps: [
-            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 0.5 },
-            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 2 },
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 0.5 },
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 2 },
           ],
         },
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
-      { layerId: "layer", startSeconds: 0, durationSeconds: 0.5 },
-      { layerId: "layer", startSeconds: 0.5, durationSeconds: 2 },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 0.5, loop: true },
+      { layerId: "layer", startSeconds: 0.5, durationSeconds: 2, loop: true },
     ]);
   });
 
@@ -138,15 +138,15 @@ describe("audio core", () => {
           name: "Main",
           baseLengthSeconds: 2,
           steps: [
-            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 0.5 },
-            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1.5 },
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 0.5 },
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 1.5 },
           ],
         },
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
-      { layerId: "layer", startSeconds: 0, durationSeconds: 1 },
-      { layerId: "layer", startSeconds: 1, durationSeconds: 3 },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 1, loop: true },
+      { layerId: "layer", startSeconds: 1, durationSeconds: 3, loop: true },
     ]);
   });
 
@@ -159,13 +159,33 @@ describe("audio core", () => {
         {
           id: "main",
           name: "Main",
-          steps: [{ targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 2 }],
+          steps: [{ targetId: "layer", targetType: "layer", repeats: 1, length: 2 }],
         },
       ],
     };
     const rendered = await renderSequencerAsync(toneAudio(), arrangement, "main", async (audio, segment, params) => stretchPcm(audio, segment, params));
     expect(rendered.samples.length).toBe(16);
     expect(rendered.samples[9]).toBeCloseTo(rendered.samples[1], 5);
+  });
+
+  it("plays through once when sequence looping is disabled", async () => {
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        {
+          id: "main",
+          name: "Main",
+          baseLengthSeconds: 2,
+          loopLayers: false,
+          steps: [{ targetId: "layer", targetType: "layer", repeats: 1, length: 1 }],
+        },
+      ],
+    };
+    const rendered = await renderSequencerAsync(toneAudio(), arrangement, "main", async (audio, segment, params) => stretchPcm(audio, segment, params));
+    expect(rendered.samples.length).toBe(16);
+    expect(rendered.samples[9]).toBe(0);
   });
 
   it("renders only layers referenced by a sequence", async () => {
@@ -176,7 +196,7 @@ describe("audio core", () => {
         { id: "unused", name: "Unused", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
-        { id: "main", name: "Main", steps: [{ targetId: "used", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1 }] },
+        { id: "main", name: "Main", steps: [{ targetId: "used", targetType: "layer", repeats: 1, length: 1 }] },
       ],
     };
     await renderSequencerAsync(toneAudio(), arrangement, "main", async (audio, segment, params) => {
@@ -186,7 +206,7 @@ describe("audio core", () => {
     expect(renderCount).toBe(1);
   });
 
-  it("schedules gap cells without a layer", () => {
+  it("applies a per-sequence gap between cells", () => {
     const arrangement: Arrangement = {
       layers: [
         { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false },
@@ -195,17 +215,17 @@ describe("audio core", () => {
         {
           id: "main",
           name: "Main",
+          gapLengthSeconds: 2,
           steps: [
-            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1 },
-            { targetId: "", targetType: "gap", repeats: 1, gapSeconds: 2, length: 1 },
-            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1 },
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 1 },
+            { targetId: "layer", targetType: "layer", repeats: 1, length: 1 },
           ],
         },
       ],
     };
     expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
-      { layerId: "layer", startSeconds: 0, durationSeconds: 1 },
-      { layerId: "layer", startSeconds: 3, durationSeconds: 1 },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 1, loop: true },
+      { layerId: "layer", startSeconds: 3, durationSeconds: 1, loop: true },
     ]);
   });
 });

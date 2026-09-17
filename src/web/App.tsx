@@ -42,13 +42,15 @@ function createLayer(duration: number, index: number): Layer {
 }
 
 function createSequenceStep(targetId: string, length = 1): SequenceStep {
-  return { targetId, targetType: "layer", repeats: 1, gapSeconds: 0, length };
+  return { targetId, targetType: "layer", repeats: 1, length };
 }
 function createSequencer(id: string, name: string, layerId?: string): Sequencer {
   return {
     id,
     name,
     baseLengthSeconds: 1,
+    gapLengthSeconds: 0,
+    loopLayers: true,
     steps: layerId ? Array.from({ length: 4 }, () => createSequenceStep(layerId)) : [],
   };
 }
@@ -284,8 +286,8 @@ export function App() {
     setSequencers((sequences) => sequences.map((sequence) => ({
       ...sequence,
       steps: remaining.length
-        ? sequence.steps.map((step) => step.targetType === "layer" && step.targetId === id ? { ...step, targetId: remaining[0].id } : step)
-        : sequence.steps.filter((step) => step.targetType === "gap"),
+        ? sequence.steps.map((step) => step.targetId === id ? { ...step, targetId: remaining[0].id } : step)
+        : sequence.steps,
     })));
     setSelectedCellIndex(0);
   }
@@ -301,7 +303,7 @@ export function App() {
     setSequencers((current) => current.map((sequence) => ({
       ...sequence,
       steps: sequence.steps.length
-        ? sequence.steps.map((step) => step.targetType === "layer" ? { ...step, targetId: generated.layers[0].id } : step)
+        ? sequence.steps.map((step) => ({ ...step, targetId: generated.layers[0].id }))
         : Array.from({ length: 4 }, () => createSequenceStep(generated.layers[0].id)),
     })));
     setSelectedCellIndex(0);
@@ -333,14 +335,12 @@ export function App() {
   function randomizeSequence(): void {
     if (!activeSequencer?.steps.length || !layers.length) return;
     updateSequence({
-      steps: activeSequencer.steps.map((step) => step.targetType === "gap"
-        ? { ...step, gapSeconds: Math.round((0.25 + Math.random() * 2.75) * 20) / 20, length: Math.round((0.5 + Math.random() * 1.5) * 4) / 4 }
-        : {
-            ...step,
-            targetId: layers[Math.floor(Math.random() * layers.length)].id,
-            length: Math.round((0.25 + Math.random() * 3.75) * 4) / 4,
-            repeats: 1 + Math.floor(Math.random() * 3),
-          }),
+      steps: activeSequencer.steps.map((step) => ({
+        ...step,
+        targetId: layers[Math.floor(Math.random() * layers.length)].id,
+        length: Math.round((0.25 + Math.random() * 3.75) * 4) / 4,
+        repeats: 1 + Math.floor(Math.random() * 3),
+      })),
     });
   }
 
@@ -358,10 +358,6 @@ export function App() {
     });
   }
 
-  function setCellType(index: number, targetType: "layer" | "gap"): void {
-    if (targetType === "gap") updateStep(index, { targetType, targetId: "", gapSeconds: 1 });
-    else updateStep(index, { targetType, targetId: layers[0]?.id ?? "", gapSeconds: 0 });
-  }
 
   function removeCell(index: number): void {
     if (!activeSequencer || activeSequencer.steps.length <= 1) return;
@@ -471,17 +467,17 @@ export function App() {
             <button className="quiet-button" type="button" onClick={randomizeSequence} disabled={!activeSequencer?.steps.length || !layers.length}>Randomize</button>
             <button className="icon-button" type="button" onClick={removeActiveSequence} disabled={sequencers.length <= 1} aria-label="Remove active sequence">×</button>
           </div>
-          <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Base length (s) <input type="number" min="0.05" max="60" step="0.05" value={activeSequencer?.baseLengthSeconds ?? 1} onChange={(event) => updateSequence({ baseLengthSeconds: Math.max(0.05, Math.min(60, Number(event.target.value))) })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label></div>
+          <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Base length (s) <input type="number" min="0.05" max="60" step="0.05" value={activeSequencer?.baseLengthSeconds ?? 1} onChange={(event) => updateSequence({ baseLengthSeconds: Math.max(0.05, Math.min(60, Number(event.target.value))) })} /></label><label>Gap (s) <input type="number" min="0" max="60" step="0.05" value={activeSequencer?.gapLengthSeconds ?? 0} onChange={(event) => updateSequence({ gapLengthSeconds: Math.max(0, Math.min(60, Number(event.target.value))) })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label><label className="toggle sequence-loop">Loop layers <input type="checkbox" checked={activeSequencer?.loopLayers !== false} onChange={(event) => updateSequence({ loopLayers: event.target.checked })} /></label></div>
           <div className="sequence-grid" aria-label="Sequence cells">
             {!activeSequencer?.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
             {activeSequencer?.steps.map((step, index) => {
               const progress = sequenceProgress?.index === index ? sequenceProgress.fraction : sequenceProgress && index < sequenceProgress.index ? 1 : 0;
-              const label = step.targetType === "gap" ? "Gap" : layerNames.get(step.targetId) ?? "Unassigned";
+              const label = layerNames.get(step.targetId) ?? "Unassigned";
               return (
                 <div className={`sequence-cell ${index === selectedCellIndex ? "is-selected" : ""}`} key={`${activeSequencer.id}-cell-${index}`} style={{ flex: `${Math.max(0.25, step.length)} 1 0` }}>
+                  <span className="sequence-cell-progress" style={{ width: `${(progress ?? 0) * 100}%` }} />
                   <button className="sequence-cell-edge" type="button" aria-label={`Resize cell ${index + 1} left edge`} onPointerDown={(event) => beginResize(event, index, "left")} onPointerMove={(event) => moveResize(event, index, "left")} onPointerUp={endResize} onPointerCancel={endResize} />
                   <button className="sequence-cell-main" type="button" onClick={() => setSelectedCellIndex(index)} aria-label={`Cell ${index + 1}, ${label}`} aria-pressed={index === selectedCellIndex}>
-                    <span className="sequence-cell-progress" style={{ width: `${(progress ?? 0) * 100}%` }} />
                     <span className="sequence-cell-content"><span>{String(index + 1).padStart(2, "0")}</span><strong>{label}</strong></span>
                   </button>
                   <button className="sequence-cell-edge" type="button" aria-label={`Resize cell ${index + 1} right edge`} onPointerDown={(event) => beginResize(event, index, "right")} onPointerMove={(event) => moveResize(event, index, "right")} onPointerUp={endResize} onPointerCancel={endResize} />
@@ -493,10 +489,9 @@ export function App() {
             <div className="cell-inspector">
               <div className="cell-inspector-heading"><strong>Cell {String(selectedCellIndex + 1).padStart(2, "0")}</strong><button className="icon-button" onClick={() => removeCell(selectedCellIndex)} disabled={activeSequencer.steps.length <= 1} aria-label="Remove selected cell">×</button></div>
               <div className="cell-fields">
-                <label>Type <select value={selectedCell.targetType === "gap" ? "gap" : "layer"} onChange={(event) => setCellType(selectedCellIndex, event.target.value as "layer" | "gap")}><option value="layer">Layer</option><option value="gap">Gap</option></select></label>
-                {selectedCell.targetType === "gap" ? <label>Gap duration <input type="number" min="0" step="0.1" value={selectedCell.gapSeconds} onChange={(event) => updateStep(selectedCellIndex, { gapSeconds: Math.max(0, Number(event.target.value)) })} /></label> : <label>Layer <select value={selectedCell.targetId} onChange={(event) => updateStep(selectedCellIndex, { targetId: event.target.value })}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select></label>}
+                <label>Layer <select value={selectedCell.targetId} onChange={(event) => updateStep(selectedCellIndex, { targetId: event.target.value })}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select></label>
                 <label>Relative length <input type="number" min="0.25" max="16" step="0.25" value={selectedCell.length} onChange={(event) => updateStep(selectedCellIndex, { length: Math.max(0.25, Number(event.target.value)) })} /></label>
-                {selectedCell.targetType !== "gap" && <label>Repeats <input type="number" min="1" max="32" step="1" value={selectedCell.repeats} onChange={(event) => updateStep(selectedCellIndex, { repeats: Number(event.target.value) })} /></label>}
+                <label>Repeats <input type="number" min="1" max="32" step="1" value={selectedCell.repeats} onChange={(event) => updateStep(selectedCellIndex, { repeats: Number(event.target.value) })} /></label>
               </div>
             </div>
           ) : null}

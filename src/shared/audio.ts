@@ -71,9 +71,8 @@ export interface Layer {
 
 export interface SequenceStep {
   targetId: string;
-  targetType: "layer" | "sequencer" | "gap";
+  targetType: "layer" | "sequencer";
   repeats: number;
-  gapSeconds: number;
   length: number;
 }
 
@@ -81,6 +80,8 @@ export interface Sequencer {
   id: string;
   name: string;
   baseLengthSeconds?: number;
+  gapLengthSeconds?: number;
+  loopLayers?: boolean;
   steps: SequenceStep[];
 }
 
@@ -95,6 +96,7 @@ export interface ScheduledLayer {
   layerId: string;
   startSeconds: number;
   durationSeconds: number;
+  loop: boolean;
 }
 
 export const DEFAULT_PARAMS: StretchParams = {
@@ -359,13 +361,11 @@ export function scheduleSequencer(
     if (!sequencer) return 0;
     active.add(id);
     let cursor = start;
-    for (const step of sequencer.steps) {
+    const gapLength = positive(sequencer.gapLengthSeconds ?? 0, 0);
+    for (let stepIndex = 0; stepIndex < sequencer.steps.length; stepIndex += 1) {
+      const step = sequencer.steps[stepIndex];
       const repeats = Math.max(1, Math.floor(step.repeats));
       for (let repeat = 0; repeat < repeats; repeat += 1) {
-        if (step.targetType === "gap") {
-          cursor += Math.max(0, step.gapSeconds);
-          continue;
-        }
         const naturalDuration = step.targetType === "layer"
           ? layerDurations[step.targetId] ?? (layers.get(step.targetId)?.params.stretch ?? 1)
           : schedule(step.targetId, cursor);
@@ -374,9 +374,15 @@ export function scheduleSequencer(
           : naturalDuration;
         const duration = baseDuration * positive(step.length, 1);
         if (step.targetType === "layer" && layers.has(step.targetId)) {
-          scheduled.push({ layerId: step.targetId, startSeconds: cursor, durationSeconds: duration });
+          scheduled.push({
+            layerId: step.targetId,
+            startSeconds: cursor,
+            durationSeconds: duration,
+            loop: sequencer.loopLayers !== false,
+          });
         }
-        cursor += duration + Math.max(0, step.gapSeconds);
+        const isLast = stepIndex === sequencer.steps.length - 1 && repeat === repeats - 1;
+        cursor += duration + (isLast ? 0 : gapLength);
       }
     }
     active.delete(id);
@@ -409,8 +415,9 @@ function mixScheduledLayers(
     const clipFrames = frameCount(clip);
     if (!clipFrames) continue;
     const targetFrames = Math.max(1, Math.round(item.durationSeconds * audio.sampleRate));
-    for (let frame = 0; frame < targetFrames; frame += 1) {
-      const clipFrame = frame % clipFrames;
+    const framesToMix = item.loop ? targetFrames : Math.min(targetFrames, clipFrames);
+    for (let frame = 0; frame < framesToMix; frame += 1) {
+      const clipFrame = item.loop ? frame % clipFrames : frame;
       const outputFrame = startFrame + frame;
       if (outputFrame >= totalFrames) break;
       for (let channel = 0; channel < audio.channels; channel += 1) {
@@ -447,12 +454,13 @@ export function sequenceCellDurations(
   const layerDurations = new Map(
     arrangement.layers.map((layer) => [layer.id, layerDuration(layer, audio.sampleRate, frameCount(audio))]),
   );
-  return sequence?.steps.map((step) => {
-    const naturalDuration = step.targetType === "layer" ? layerDurations.get(step.targetId) ?? 0 : 0;
-    const baseDuration = step.targetType === "layer"
-      ? positive(sequence.baseLengthSeconds ?? 0, naturalDuration)
-      : naturalDuration;
-    return baseDuration * positive(step.length, 1) * Math.max(1, Math.floor(step.repeats));
+  const gapLength = positive(sequence?.gapLengthSeconds ?? 0, 0);
+  return sequence?.steps.map((step, index) => {
+    const naturalDuration = layerDurations.get(step.targetId) ?? 0;
+    const baseDuration = positive(sequence.baseLengthSeconds ?? 0, naturalDuration);
+    const repeats = Math.max(1, Math.floor(step.repeats));
+    const gaps = repeats - 1 + (index < sequence.steps.length - 1 ? 1 : 0);
+    return baseDuration * positive(step.length, 1) * repeats + gapLength * gaps;
   }) ?? [];
 }
 
