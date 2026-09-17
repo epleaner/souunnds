@@ -127,6 +127,29 @@ describe("audio core", () => {
     ]);
   });
 
+  it("multiplies relative lengths by the sequence base length", () => {
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        {
+          id: "main",
+          name: "Main",
+          baseLengthSeconds: 2,
+          steps: [
+            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 0.5 },
+            { targetId: "layer", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1.5 },
+          ],
+        },
+      ],
+    };
+    expect(scheduleSequencer(arrangement, "main", { layer: 1 })).toEqual([
+      { layerId: "layer", startSeconds: 0, durationSeconds: 1 },
+      { layerId: "layer", startSeconds: 1, durationSeconds: 3 },
+    ]);
+  });
+
   it("loops rendered layer audio to fill longer cells", async () => {
     const arrangement: Arrangement = {
       layers: [

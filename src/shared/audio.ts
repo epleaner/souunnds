@@ -80,6 +80,7 @@ export interface SequenceStep {
 export interface Sequencer {
   id: string;
   name: string;
+  baseLengthSeconds?: number;
   steps: SequenceStep[];
 }
 
@@ -365,9 +366,12 @@ export function scheduleSequencer(
           cursor += Math.max(0, step.gapSeconds);
           continue;
         }
-        const baseDuration = step.targetType === "layer"
+        const naturalDuration = step.targetType === "layer"
           ? layerDurations[step.targetId] ?? (layers.get(step.targetId)?.params.stretch ?? 1)
           : schedule(step.targetId, cursor);
+        const baseDuration = step.targetType === "layer"
+          ? positive(sequencer.baseLengthSeconds ?? 0, naturalDuration)
+          : naturalDuration;
         const duration = baseDuration * positive(step.length, 1);
         if (step.targetType === "layer" && layers.has(step.targetId)) {
           scheduled.push({ layerId: step.targetId, startSeconds: cursor, durationSeconds: duration });
@@ -444,8 +448,10 @@ export function sequenceCellDurations(
     arrangement.layers.map((layer) => [layer.id, layerDuration(layer, audio.sampleRate, frameCount(audio))]),
   );
   return sequence?.steps.map((step) => {
-    if (step.targetType === "gap") return Math.max(0, step.gapSeconds);
-    const baseDuration = step.targetType === "layer" ? layerDurations.get(step.targetId) ?? 0 : 0;
+    const naturalDuration = step.targetType === "layer" ? layerDurations.get(step.targetId) ?? 0 : 0;
+    const baseDuration = step.targetType === "layer"
+      ? positive(sequence.baseLengthSeconds ?? 0, naturalDuration)
+      : naturalDuration;
     return baseDuration * positive(step.length, 1) * Math.max(1, Math.floor(step.repeats));
   }) ?? [];
 }

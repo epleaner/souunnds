@@ -44,6 +44,14 @@ function createLayer(duration: number, index: number): Layer {
 function createSequenceStep(targetId: string, length = 1): SequenceStep {
   return { targetId, targetType: "layer", repeats: 1, gapSeconds: 0, length };
 }
+function createSequencer(id: string, name: string, layerId?: string): Sequencer {
+  return {
+    id,
+    name,
+    baseLengthSeconds: 1,
+    steps: layerId ? Array.from({ length: 4 }, () => createSequenceStep(layerId)) : [],
+  };
+}
 
 function pcmFromAudioBuffer(buffer: AudioBuffer): PcmAudio {
   const samples = new Float32Array(buffer.length * buffer.numberOfChannels);
@@ -103,15 +111,13 @@ async function stretchForPlayback(audio: PcmAudio, segment: Layer["segment"], pa
   };
   return stretchWithPaulstretch(audio, fallbackSegment, fallbackParams);
 }
-
 export function App() {
   const [source, setSource] = useState<PcmAudio | null>(null);
   const [fileName, setFileName] = useState("");
   const [duration, setDuration] = useState(0);
   const [layers, setLayers] = useState<Layer[]>([]);
-  const [sequencers, setSequencers] = useState<Sequencer[]>([
-    { id: MAIN_SEQUENCE_ID, name: "Main sequence", steps: [] },
-  ]);
+  const [sequencers, setSequencers] = useState<Sequencer[]>([createSequencer(MAIN_SEQUENCE_ID, "Main sequence")]);
+  const [activeSequencerId, setActiveSequencerId] = useState(MAIN_SEQUENCE_ID);
   const [selectedCellIndex, setSelectedCellIndex] = useState(0);
   const [generatedCount, setGeneratedCount] = useState(4);
   const [generatedSeed, setGeneratedSeed] = useState(23);
@@ -120,14 +126,14 @@ export function App() {
   const [playing, setPlaying] = useState(false);
   const [sequencePlayback, setSequencePlayback] = useState<SequencePlayback | null>(null);
   const [sequenceProgress, setSequenceProgress] = useState<{ index: number; fraction: number } | null>(null);
+  const arrangement = useMemo<Arrangement>(() => ({ layers, sequencers }), [layers, sequencers]);
+  const activeSequencer = sequencers.find((sequence) => sequence.id === activeSequencerId) ?? sequencers[0];
+  const selectedCell = activeSequencer?.steps[selectedCellIndex];
   const [adsr, setAdsr] = useState<PlaybackAdsr>({ ...DEFAULT_PLAYBACK_ADSR });
   const contextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
 
-  const arrangement = useMemo<Arrangement>(() => ({ layers, sequencers }), [layers, sequencers]);
-  const activeSequencer = sequencers[0];
-  const selectedCell = activeSequencer?.steps[selectedCellIndex];
   const layerNames = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.name])), [layers]);
 
   useEffect(() => {
@@ -204,11 +210,8 @@ export function App() {
       setFileName(file.name);
       setDuration(nextDuration);
       setLayers([initialLayer]);
-      setSequencers([{
-        id: MAIN_SEQUENCE_ID,
-        name: "Main sequence",
-        steps: Array.from({ length: 4 }, () => createSequenceStep(initialLayer.id)),
-      }]);
+      setSequencers([createSequencer(MAIN_SEQUENCE_ID, "Main sequence", initialLayer.id)]);
+      setActiveSequencerId(MAIN_SEQUENCE_ID);
       setSelectedCellIndex(0);
       setStatus(`${file.name} ready · ${formatSeconds(nextDuration)} · ${decoded.sampleRate.toLocaleString()} Hz`);
     } catch (error) {
@@ -253,8 +256,8 @@ export function App() {
     const playbackArrangement = arrangementForPlayback();
     setStatus("Rendering sequence with upstream Paulstretch…");
     try {
-      const cellDurations = sequenceCellDurations(source, playbackArrangement, MAIN_SEQUENCE_ID);
-      await playPcm(await renderSequencerAsync(source, playbackArrangement, MAIN_SEQUENCE_ID, stretchForPlayback), activeSequencer.name, cellDurations);
+      const cellDurations = sequenceCellDurations(source, playbackArrangement, activeSequencer.id);
+      await playPcm(await renderSequencerAsync(source, playbackArrangement, activeSequencer.id, stretchForPlayback), activeSequencer.name, cellDurations);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     }
@@ -307,8 +310,38 @@ export function App() {
 
   function updateSequence(patch: Partial<Sequencer>): void {
     setSequencers((current) => current.map((sequence) => (
-      sequence.id === MAIN_SEQUENCE_ID ? { ...sequence, ...patch } : sequence
+      sequence.id === activeSequencer?.id ? { ...sequence, ...patch } : sequence
     )));
+  }
+
+  function addSequence(): void {
+    const id = `sequence-${Date.now()}-${sequencers.length + 1}`;
+    const next = createSequencer(id, `Sequence ${sequencers.length + 1}`, layers[0]?.id);
+    setSequencers((current) => [...current, next]);
+    setActiveSequencerId(id);
+    setSelectedCellIndex(0);
+  }
+
+  function removeActiveSequence(): void {
+    if (!activeSequencer || sequencers.length <= 1) return;
+    const remaining = sequencers.filter((sequence) => sequence.id !== activeSequencer.id);
+    setSequencers(remaining);
+    setActiveSequencerId(remaining[0].id);
+    setSelectedCellIndex(0);
+  }
+
+  function randomizeSequence(): void {
+    if (!activeSequencer?.steps.length || !layers.length) return;
+    updateSequence({
+      steps: activeSequencer.steps.map((step) => step.targetType === "gap"
+        ? { ...step, gapSeconds: Math.round((0.25 + Math.random() * 2.75) * 20) / 20, length: Math.round((0.5 + Math.random() * 1.5) * 4) / 4 }
+        : {
+            ...step,
+            targetId: layers[Math.floor(Math.random() * layers.length)].id,
+            length: Math.round((0.25 + Math.random() * 3.75) * 4) / 4,
+            repeats: 1 + Math.floor(Math.random() * 3),
+          }),
+    });
   }
 
   function setCellCount(value: number): void {
@@ -432,7 +465,13 @@ export function App() {
 
         <section className="panel sequence-panel">
           <div className="panel-heading"><div><p className="section-kicker">02 · Sequence</p><h2>Sequence</h2></div><div className="panel-actions"><button className="primary-button compact" onClick={() => void previewSequence()} disabled={!source || !activeSequencer?.steps.length}>Play sequence</button><button className="stop-button" onClick={stopPlayback} disabled={!playing}>Stop</button></div></div>
-          <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label></div>
+          <div className="sequence-library">
+            <label>Sequence <select aria-label="Active sequence" value={activeSequencer?.id ?? ""} onChange={(event) => { setActiveSequencerId(event.target.value); setSelectedCellIndex(0); }}>{sequencers.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}</select></label>
+            <button className="quiet-button" type="button" onClick={addSequence}>+ Sequence</button>
+            <button className="quiet-button" type="button" onClick={randomizeSequence} disabled={!activeSequencer?.steps.length || !layers.length}>Randomize</button>
+            <button className="icon-button" type="button" onClick={removeActiveSequence} disabled={sequencers.length <= 1} aria-label="Remove active sequence">×</button>
+          </div>
+          <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Base length (s) <input type="number" min="0.05" max="60" step="0.05" value={activeSequencer?.baseLengthSeconds ?? 1} onChange={(event) => updateSequence({ baseLengthSeconds: Math.max(0.05, Math.min(60, Number(event.target.value))) })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label></div>
           <div className="sequence-grid" aria-label="Sequence cells">
             {!activeSequencer?.steps.length && <div className="empty-state">Add a layer to create sequence cells.</div>}
             {activeSequencer?.steps.map((step, index) => {
