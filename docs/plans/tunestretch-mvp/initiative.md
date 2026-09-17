@@ -54,3 +54,5 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Silent playback repair bead: `tunestretch-jow`.
 - Generated placement scans deterministic source windows; legacy generated layers are relocated to the best audible window before layer, arrangement, or sequence playback.
 - Dark mode now uses an ink-black paper, charcoal panels, warm-white type, muted rules, and retained red/blue accents.
+- Sequence abort repair bead: `tunestretch-wqv`.
+- Sequence rendering now serializes WASM layer renders and skips layers not referenced by the sequence; playback retries failed or silent renders with bounded audible fallback parameters.

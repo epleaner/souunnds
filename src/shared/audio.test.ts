@@ -145,6 +145,24 @@ describe("audio core", () => {
     expect(rendered.samples[9]).toBeCloseTo(rendered.samples[1], 5);
   });
 
+  it("renders only layers referenced by a sequence", async () => {
+    let renderCount = 0;
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "used", name: "Used", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "unused", name: "Unused", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        { id: "main", name: "Main", steps: [{ targetId: "used", targetType: "layer", repeats: 1, gapSeconds: 0, length: 1 }] },
+      ],
+    };
+    await renderSequencerAsync(toneAudio(), arrangement, "main", async (audio, segment, params) => {
+      renderCount += 1;
+      return stretchPcm(audio, segment, params);
+    });
+    expect(renderCount).toBe(1);
+  });
+
   it("schedules gap cells without a layer", () => {
     const arrangement: Arrangement = {
       layers: [

@@ -79,6 +79,30 @@ function repairGeneratedLayers(audio: PcmAudio, layers: Layer[]): { layers: Laye
   });
   return { layers: repaired, changed };
 }
+function hasSignal(audio: PcmAudio): boolean {
+  for (const sample of audio.samples) if (Math.abs(sample) > 1e-6) return true;
+  return false;
+}
+
+async function stretchForPlayback(audio: PcmAudio, segment: Layer["segment"], params: Layer["params"]): Promise<PcmAudio> {
+  try {
+    const rendered = await stretchWithPaulstretch(audio, segment, params);
+    if (hasSignal(rendered) || sourceSegmentRms(audio, segment) > 1e-8) return rendered;
+  } catch {
+    // Retry generated/legacy values with a bounded, audible fallback below.
+  }
+  const length = Math.max(0.15, Math.min(4, segment.end - segment.start));
+  const start = findAudibleStart(audio, length);
+  const fallbackSegment = { start, end: Math.min(audio.samples.length / audio.channels / audio.sampleRate, start + length) };
+  const fallbackParams = {
+    ...DEFAULT_PARAMS,
+    stretch: Math.min(4, Math.max(2, params.stretch)),
+    loops: 1,
+    windowSeconds: 0.25,
+    seed: params.seed,
+  };
+  return stretchWithPaulstretch(audio, fallbackSegment, fallbackParams);
+}
 
 export function App() {
   const [source, setSource] = useState<PcmAudio | null>(null);
@@ -206,7 +230,7 @@ export function App() {
     const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
     setStatus(`Rendering ${playableLayer.name} with upstream Paulstretch…`);
     try {
-      await playPcm(await stretchWithPaulstretch(source, playableLayer.segment, playableLayer.params), playableLayer.name);
+      await playPcm(await stretchForPlayback(source, playableLayer.segment, playableLayer.params), playableLayer.name);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Layer preview failed.");
     }
@@ -218,7 +242,7 @@ export function App() {
     const playbackArrangement = arrangementForPlayback();
     setStatus("Rendering layers with upstream Paulstretch…");
     try {
-      await playPcm(await renderArrangementAsync(source, playbackArrangement, stretchWithPaulstretch), `${layers.length} layers`);
+      await playPcm(await renderArrangementAsync(source, playbackArrangement, stretchForPlayback), `${layers.length} layers`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Layer playback failed.");
     }
@@ -230,7 +254,7 @@ export function App() {
     setStatus("Rendering sequence with upstream Paulstretch…");
     try {
       const cellDurations = sequenceCellDurations(source, playbackArrangement, MAIN_SEQUENCE_ID);
-      await playPcm(await renderSequencerAsync(source, playbackArrangement, MAIN_SEQUENCE_ID, stretchWithPaulstretch), activeSequencer.name, cellDurations);
+      await playPcm(await renderSequencerAsync(source, playbackArrangement, MAIN_SEQUENCE_ID, stretchForPlayback), activeSequencer.name, cellDurations);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     }

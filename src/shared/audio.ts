@@ -330,10 +330,10 @@ export async function renderArrangementAsync(
   arrangement: Arrangement,
   stretch: AsyncStretchFunction,
 ): Promise<PcmAudio> {
-  const rendered = await Promise.all(arrangement.layers.map(async (layer) => ({
-    layer,
-    audio: await stretch(audio, layer.segment, layer.params),
-  })));
+  const rendered: { layer: Layer; audio: PcmAudio }[] = [];
+  for (const layer of arrangement.layers) {
+    rendered.push({ layer, audio: await stretch(audio, layer.segment, layer.params) });
+  }
   return mixArrangementLayers(audio, rendered);
 }
 
@@ -470,12 +470,11 @@ export async function renderSequencerAsync(
   stretch: AsyncStretchFunction,
 ): Promise<PcmAudio> {
   const schedule = sequenceSchedule(audio, arrangement, sequencerId);
-  const rendered = new Map(
-    await Promise.all(arrangement.layers.map(async (layer) => [
-      layer.id,
-      await stretch(audio, layer.segment, layer.params),
-    ] as const)),
-  );
+  const requiredLayerIds = new Set(schedule.map((item) => item.layerId));
+  const rendered = new Map<string, PcmAudio>();
+  for (const layer of arrangement.layers) {
+    if (requiredLayerIds.has(layer.id)) rendered.set(layer.id, await stretch(audio, layer.segment, layer.params));
+  }
   return mixScheduledLayers(audio, arrangement, schedule, rendered);
 }
 
