@@ -53,3 +53,4 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Sequence rendering loops a layer's rendered clip when a cell's relative duration exceeds the clip duration.
 - Silent playback repair bead: `tunestretch-jow`.
 - Generated placement scans deterministic source windows; legacy generated layers are relocated to the best audible window before layer, arrangement, or sequence playback.
+- Dark mode now uses an ink-black paper, charcoal panels, warm-white type, muted rules, and retained red/blue accents.

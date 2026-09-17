@@ -1,16 +1,16 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   font-family: Helvetica Neue, Helvetica, Arial, sans-serif;
-  color: #111111;
-  background: #f4f3ef;
+  color: #f2f0e9;
+  background: #111111;
   font-synthesis: none;
-  --paper: #f4f3ef;
-  --white: #ffffff;
-  --ink: #111111;
-  --muted: #66645f;
-  --line: #bdbbb4;
-  --red: #e6332a;
-  --blue: #1746d1;
+  --paper: #111111;
+  --white: #1d1d1d;
+  --ink: #f2f0e9;
+  --muted: #aaa79f;
+  --line: #55534e;
+  --red: #f0443b;
+  --blue: #7594ff;
 }
 
 * { box-sizing: border-box; }
@@ -26,7 +26,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 h1 { margin: 0; font-size: clamp(4rem, 11vw, 10rem); letter-spacing: -.1em; line-height: .76; font-weight: 700; }
 .hero-mark { display: grid; grid-template-columns: repeat(3, 1fr); align-items: end; height: 105px; border-left: 1px solid var(--ink); padding-left: 18px; color: var(--red); font-size: 5rem; line-height: .58; }.hero-mark span:nth-child(2) { color: var(--ink); }.hero-mark span:nth-child(3) { color: var(--red); }
 
-.panel { border: 1px solid var(--ink); background: var(--white); box-shadow: 7px 7px 0 var(--ink); }
+.panel { border: 1px solid var(--ink); background: var(--white); box-shadow: 7px 7px 0 #000000; }
 .import-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 15px 25px; padding: 22px 24px; margin-top: 24px; }
 h2 { margin: 0; font-size: 1.55rem; letter-spacing: -.04em; font-weight: 700; }.status { grid-column: 1 / -1; padding-top: 13px; border-top: 1px solid var(--line); color: var(--muted); font: 12px 'Courier New', monospace; }
 .global-playback-controls { grid-column: 1 / -1; display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 24px; align-items: end; padding-top: 15px; border-top: 1px solid var(--line); }.global-playback-controls h3 { margin: 0; font-size: .95rem; }.adsr-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }.adsr-grid label { gap: 5px; }.adsr-grid output { color: var(--muted); font: 11px 'Courier New', monospace; font-weight: 400; letter-spacing: 0; text-transform: none; }.adsr-grid input[type='range'] { width: 100%; padding: 0; accent-color: var(--red); }
