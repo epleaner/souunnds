@@ -39,6 +39,10 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Upstream is GPL-2.0. The generated WASM runtime is checked in so Railway can deploy the browser client from a clean checkout.
 - Current change bead: `tunestretch-cft`.
 - CLI now accepts `.mp3` and other non-WAV inputs through temporary ffmpeg normalization before upstream rendering.
+- Private GitHub repository `epleaner/souunnds` is private with `main` pushed at `dcfe7c7`.
+- Railway project/service `souunnds` deployed successfully; service domain is `souunnds-production.up.railway.app`.
+- Porkbun DNS now serves the Railway CNAME and `_railway-verify.souunnds` TXT record; Railway reports ownership verified and the custom certificate valid.
+- HTTPS smoke and Orca browser verification passed at `https://souunnds.elipleaner.com/`; title and heading use `souunnds`.
 - Web source copy and file picker explicitly communicate MP3/WAV local support.
 - Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
 - Refinement bead: `tunestretch-l3y`.
