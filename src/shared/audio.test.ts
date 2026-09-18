@@ -231,6 +231,27 @@ describe("audio core", () => {
     expect(renderCount).toBe(1);
   });
 
+  it("reuses rendered layers across sequences when a cache is provided", async () => {
+    let renderCount = 0;
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+      ],
+      sequencers: [
+        { id: "first", name: "First", steps: [{ targetId: "layer", targetType: "layer", repeats: 1, length: 1 }] },
+        { id: "second", name: "Second", steps: [{ targetId: "layer", targetType: "layer", repeats: 1, length: 1 }] },
+      ],
+    };
+    const renderedLayers = new Map<string, PcmAudio>();
+    const stretch = async (audio: PcmAudio, segment: Arrangement["layers"][number]["segment"], params: Arrangement["layers"][number]["params"]) => {
+      renderCount += 1;
+      return stretchPcm(audio, segment, params);
+    };
+    await renderSequencerAsync(toneAudio(), arrangement, "first", stretch, undefined, renderedLayers);
+    await renderSequencerAsync(toneAudio(), arrangement, "second", stretch, undefined, renderedLayers);
+    expect(renderCount).toBe(1);
+  });
+
   it("applies a per-sequence gap between cells", () => {
     const arrangement: Arrangement = {
       layers: [

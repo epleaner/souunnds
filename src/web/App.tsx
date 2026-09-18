@@ -352,8 +352,9 @@ export function App() {
         sequenceId: sequence.id,
         cellDurations: sequenceCellDurations(source, playbackArrangement, sequence.id),
       }));
+      const renderedLayers = new Map<string, PcmAudio>();
       for (const [index, sequence] of playableSequences.entries()) {
-        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback, adsr));
+        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback, adsr, renderedLayers));
         setProcessingProgress(Math.round(((index + 1) / playableSequences.length) * 100));
         await nextPaint();
       }

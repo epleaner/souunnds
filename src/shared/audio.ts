@@ -503,14 +503,16 @@ export async function renderSequencerAsync(
   sequencerId: string,
   stretch: AsyncStretchFunction,
   adsr?: PlaybackAdsr,
+  renderedLayers: Map<string, PcmAudio> = new Map(),
 ): Promise<PcmAudio> {
   const schedule = sequenceSchedule(audio, arrangement, sequencerId);
   const requiredLayerIds = new Set(schedule.map((item) => item.layerId));
-  const rendered = new Map<string, PcmAudio>();
   for (const layer of arrangement.layers) {
-    if (requiredLayerIds.has(layer.id)) rendered.set(layer.id, await stretch(audio, layer.segment, layer.params));
+    if (requiredLayerIds.has(layer.id) && !renderedLayers.has(layer.id)) {
+      renderedLayers.set(layer.id, await stretch(audio, layer.segment, layer.params));
+    }
   }
-  return mixScheduledLayers(audio, arrangement, schedule, rendered, adsr);
+  return mixScheduledLayers(audio, arrangement, schedule, renderedLayers, adsr);
 }
 
 export function sourceSegmentRms(audio: PcmAudio, segment: Segment): number {

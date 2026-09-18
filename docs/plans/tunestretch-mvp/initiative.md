@@ -37,7 +37,7 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - `src/web/paulstretch.ts` loads the generated upstream Emscripten module; arrangement and sequencer policy remains in TypeScript.
 - `npm run build:core`, `npm run build:wasm`, upstream CTest, `npm test`, `npm run build`, native CLI smoke, and browser WASM preview/layer/sequence smoke all passed.
 - Upstream is GPL-2.0. Generated WASM is ignored and must be produced with `npm run build:wasm` before browser preview.
-- Current change bead: `tunestretch-63z`.
+- Current change bead: `tunestretch-v8n`.
 - CLI now accepts `.mp3` and other non-WAV inputs through temporary ffmpeg normalization before upstream rendering.
 - Web source copy and file picker explicitly communicate MP3/WAV local support.
 - Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
@@ -68,3 +68,4 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Sequence now has configurable Rows × Columns grid randomization; playback processing footer reports render percentage progress.
 - Default playback ADSR now starts with the ambient Eno-style envelope: 1s attack, 0.8s decay, 70% sustain, and 2s release.
 - Processing progress now yields between completed render units so the footer percentage visibly advances during multi-layer and multi-sequence work.
+- Play all now reuses each rendered layer across sequences to avoid repeated WASM renders and browser aborts on larger grids.
