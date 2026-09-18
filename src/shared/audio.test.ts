@@ -30,24 +30,23 @@ describe("audio core", () => {
     expect(decoded.samples[15]).toBeCloseTo(15 / 16, 3);
   });
 
-  it("stretches and repeats only the selected segment", () => {
+  it("stretches the selected segment once", () => {
     const stretched = stretchPcm(toneAudio(), { start: 0.5, end: 1.5 }, {
       ...DEFAULT_PARAMS,
       stretch: 2,
-      loops: 2,
       windowSeconds: 0.5,
       overlap: 0.5,
     });
     expect(stretched.sampleRate).toBe(8);
-    expect(stretched.samples.length).toBe(32);
+    expect(stretched.samples.length).toBe(16);
     expect([...stretched.samples].every((sample) => Number.isFinite(sample))).toBe(true);
   });
 
   it("mixes layers at their requested offsets", () => {
     const arrangement: Arrangement = {
       layers: [
-        { id: "a", name: "A", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
-        { id: "b", name: "B", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 1, gain: 1, muted: false },
+        { id: "a", name: "A", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "b", name: "B", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 1, gain: 1, muted: false },
       ],
       sequencers: [],
     };
@@ -85,7 +84,7 @@ describe("audio core", () => {
     const audio: PcmAudio = { sampleRate: 4, channels: 1, samples: new Float32Array(8).fill(1) };
     const arrangement: Arrangement = {
       layers: [
-        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
         {
@@ -156,7 +155,7 @@ describe("audio core", () => {
   it("multiplies relative lengths by the sequence base length", () => {
     const arrangement: Arrangement = {
       layers: [
-        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
         {
@@ -179,7 +178,7 @@ describe("audio core", () => {
   it("loops rendered layer audio to fill longer cells", async () => {
     const arrangement: Arrangement = {
       layers: [
-        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
         {
@@ -197,7 +196,7 @@ describe("audio core", () => {
   it("plays through once when sequence looping is disabled", async () => {
     const arrangement: Arrangement = {
       layers: [
-        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
         {
@@ -218,8 +217,8 @@ describe("audio core", () => {
     let renderCount = 0;
     const arrangement: Arrangement = {
       layers: [
-        { id: "used", name: "Used", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
-        { id: "unused", name: "Unused", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1, loops: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "used", name: "Used", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
+        { id: "unused", name: "Unused", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },
       ],
       sequencers: [
         { id: "main", name: "Main", steps: [{ targetId: "used", targetType: "layer", repeats: 1, length: 1 }] },

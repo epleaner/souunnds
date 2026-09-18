@@ -44,13 +44,11 @@ function fftSizeForWindow(windowSeconds: number, sampleRate: number): number {
   return 2 ** Math.ceil(Math.log2(requested));
 }
 
-function loopSegment(audio: PcmAudio, segment: Segment, loops: number): PcmAudio {
+function segmentAudio(audio: PcmAudio, segment: Segment): PcmAudio {
   const startFrame = Math.max(0, Math.min(frameCount(audio) - 1, Math.floor(Math.min(segment.start, segment.end) * audio.sampleRate)));
   const endFrame = Math.max(startFrame + 1, Math.min(frameCount(audio), Math.ceil(Math.max(segment.start, segment.end) * audio.sampleRate)));
   const selected = audio.samples.subarray(startFrame * audio.channels, endFrame * audio.channels);
-  const samples = new Float32Array(selected.length * loops);
-  for (let loop = 0; loop < loops; loop += 1) samples.set(selected, loop * selected.length);
-  return { ...audio, samples };
+  return { ...audio, samples: new Float32Array(selected) };
 }
 
 export async function stretchWithPaulstretch(
@@ -62,7 +60,7 @@ export async function stretchWithPaulstretch(
     throw new Error("Upstream Paulstretch supports mono and stereo files only.");
   }
   const module = await loadPaulstretchModule();
-  const prepared = loopSegment(audio, segment, Math.max(1, Math.floor(params.loops)));
+  const prepared = segmentAudio(audio, segment);
   const frames = frameCount(prepared);
   const left = new Float32Array(frames);
   const right = prepared.channels > 1 ? new Float32Array(frames) : undefined;

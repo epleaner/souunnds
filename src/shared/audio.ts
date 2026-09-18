@@ -62,7 +62,6 @@ export interface StretchParams {
   windowSeconds: number;
   overlap: number;
   onset: number;
-  loops: number;
   seed: number;
 }
 
@@ -116,7 +115,6 @@ export const DEFAULT_PARAMS: StretchParams = {
   windowSeconds: 0.25,
   overlap: 0.75,
   onset: 0,
-  loops: 1,
   seed: 11,
 };
 
@@ -239,8 +237,8 @@ export function encodeWav(audio: PcmAudio): Uint8Array {
 
 /**
  * Stretch a segment with deterministic windowed granular overlap/add. It is
- * deliberately stream-friendly: grains are short, overlap is configurable, and
- * the segment wraps for loops rather than requiring a second decoded copy.
+ * deliberately stream-friendly: grains are short, overlap is configurable,
+ * and the selected segment is rendered once.
  */
 export function stretchPcm(audio: PcmAudio, segment: Segment, params: StretchParams): PcmAudio {
   const totalFrames = frameCount(audio);
@@ -250,8 +248,7 @@ export function stretchPcm(audio: PcmAudio, segment: Segment, params: StretchPar
   const endFrame = clamp(Math.ceil(Math.max(segment.start, segment.end) * audio.sampleRate), startFrame + 1, totalFrames);
   const sourceFrames = Math.max(1, endFrame - startFrame);
   const stretch = positive(params.stretch, 1);
-  const loops = Math.max(1, Math.floor(positive(params.loops, 1)));
-  const targetFrames = Math.max(1, Math.round(sourceFrames * stretch * loops));
+  const targetFrames = Math.max(1, Math.round(sourceFrames * stretch));
   const grainFrames = clamp(Math.round(positive(params.windowSeconds, 0.25) * audio.sampleRate), 64, sourceFrames);
   const overlap = clamp(params.overlap, 0, 0.95);
   const hopFrames = Math.max(1, Math.round(grainFrames * (1 - overlap)));
@@ -261,7 +258,7 @@ export function stretchPcm(audio: PcmAudio, segment: Segment, params: StretchPar
 
   for (let outputStart = 0; outputStart < targetFrames; outputStart += hopFrames) {
     const progress = outputStart / targetFrames;
-    const sourceProgress = (progress * loops) % 1;
+    const sourceProgress = progress;
     const center = startFrame + Math.floor(sourceProgress * sourceFrames);
     const jitter = Math.floor((random() - 0.5) * grainFrames);
     const grainStart = center + jitter - Math.floor(grainFrames / 2);
@@ -354,7 +351,7 @@ export async function renderArrangementAsync(
 
 function layerDuration(layer: Layer, sourceSampleRate: number, sourceFrames: number): number {
   const segmentFrames = Math.max(1, Math.ceil((layer.segment.end - layer.segment.start) * sourceSampleRate));
-  return (segmentFrames * positive(layer.params.stretch, 1) * Math.max(1, Math.floor(layer.params.loops))) / sourceSampleRate;
+  return (segmentFrames * positive(layer.params.stretch, 1)) / sourceSampleRate;
 }
 
 export function scheduleSequencer(
@@ -595,7 +592,6 @@ export function generateArrangement(
       params: {
         ...DEFAULT_PARAMS,
         stretch,
-        loops: 1 + Math.floor(random() * 3),
         windowSeconds: 0.12 + random() * 0.5,
         onset: random() * 0.5,
         seed: Math.floor(random() * 100000),

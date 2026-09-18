@@ -126,7 +126,6 @@ async function stretchForPlayback(audio: PcmAudio, segment: Layer["segment"], pa
   const fallbackParams = {
     ...DEFAULT_PARAMS,
     stretch: Math.min(4, Math.max(2, params.stretch)),
-    loops: 1,
     windowSeconds: 0.25,
     seed: params.seed,
   };
@@ -528,7 +527,6 @@ export function App() {
                   <label>Start <input type="number" min="0" max={duration} step="0.01" value={layer.segment.start} onChange={(event) => updateLayer(layer.id, { segment: { ...layer.segment, start: Number(event.target.value) } })} /></label>
                   <label>End <input type="number" min="0.01" max={duration} step="0.01" value={layer.segment.end} onChange={(event) => updateLayer(layer.id, { segment: { ...layer.segment, end: Number(event.target.value) } })} /></label>
                   <label>Stretch <input type="number" min="1" max="40" step="0.5" value={layer.params.stretch} onChange={(event) => updateLayerParams(layer.id, { stretch: Number(event.target.value) })} /></label>
-                  <label>Loops <input type="number" min="1" max="32" step="1" value={layer.params.loops} onChange={(event) => updateLayerParams(layer.id, { loops: Number(event.target.value) })} /></label>
                   <label>Offset <input type="number" min="0" step="0.1" value={layer.offsetSeconds} onChange={(event) => updateLayer(layer.id, { offsetSeconds: Number(event.target.value) })} /></label>
                   <label>Gain <input type="number" min="0" max="2" step="0.05" value={layer.gain} onChange={(event) => updateLayer(layer.id, { gain: Number(event.target.value) })} /></label>
                 </div>
