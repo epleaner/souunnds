@@ -7,6 +7,7 @@ import {
   renderArrangementAsync,
   renderSequencerAsync,
   sequenceCellDurations,
+  fitPcmDuration,
   findAudibleStart,
   sourceSegmentRms,
   type Arrangement,
@@ -19,7 +20,7 @@ import {
 import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
 const MAIN_SEQUENCE_ID = "main-sequencer";
 
-type SequencePlayback = { tracks: Array<{ sequenceId: string; cellDurations: number[] }>; startedAt: number; simultaneous: boolean };
+type SequencePlayback = { tracks: Array<{ sequenceId: string; cellDurations: number[] }>; startedAt: number; simultaneous: boolean; loop: boolean };
 type ResizeState = { sequenceId: string; index: number; edge: "left" | "right"; startX: number; initialLength: number; pixelsPerLength: number };
 
 function formatSeconds(seconds: number): string {
@@ -70,6 +71,7 @@ function createSequencer(id: string, name: string, layerId?: string): Sequencer 
     baseLengthSeconds: 1,
     gapLengthSeconds: 0,
     loopLayers: true,
+    loopSequence: false,
     steps: layerId ? Array.from({ length: 4 }, () => createSequenceStep(layerId)) : [],
   };
 }
@@ -172,7 +174,8 @@ export function App() {
       ? Math.max(...sequencePlayback.tracks.map(trackDuration))
       : sequencePlayback.tracks.reduce((total, track) => total + trackDuration(track), 0);
     const update = () => {
-      const elapsed = (performance.now() - sequencePlayback.startedAt) / 1000;
+      const rawElapsed = (performance.now() - sequencePlayback.startedAt) / 1000;
+      const elapsed = sequencePlayback.loop && totalDuration > 0 ? rawElapsed % totalDuration : rawElapsed;
       let cursor = 0;
       const progress = sequencePlayback.tracks.map((track) => {
         const duration = trackDuration(track);
@@ -215,6 +218,7 @@ export function App() {
     sequenceTracks?: SequencePlayback["tracks"],
     simultaneous = false,
     playbackAdsr: PlaybackAdsr | null = adsr,
+    loop = false,
   ): Promise<void> {
     const context = ensureContext();
     await context.resume();
@@ -222,6 +226,7 @@ export function App() {
     const preparedAudio = playbackAdsr ? applyPlaybackAdsr(audio, playbackAdsr) : audio;
     const node = context.createBufferSource();
     node.buffer = audioBufferFromPcm(context, preparedAudio);
+    node.loop = loop;
     node.connect(context.destination);
     node.onended = () => {
       if (sourceNodeRef.current === node) {
@@ -233,7 +238,7 @@ export function App() {
     sourceNodeRef.current = node;
     node.start();
     setPlaying(true);
-    if (sequenceTracks) setSequencePlayback({ tracks: sequenceTracks, startedAt: performance.now(), simultaneous });
+    if (sequenceTracks) setSequencePlayback({ tracks: sequenceTracks, startedAt: performance.now(), simultaneous, loop });
     setStatus(`Playing ${label} · ${formatSeconds(preparedAudio.samples.length / preparedAudio.channels / preparedAudio.sampleRate)}`);
   }
 
@@ -331,7 +336,7 @@ export function App() {
       };
       const rendered = await renderSequencerAsync(source, playbackArrangement, activeSequencer.id, renderWithProgress, adsr);
       setProcessingProgress(100);
-      await playPcm(rendered, activeSequencer.name, [{ sequenceId: activeSequencer.id, cellDurations }], false, null);
+      await playPcm(rendered, activeSequencer.name, [{ sequenceId: activeSequencer.id, cellDurations }], false, null, activeSequencer.loopSequence === true);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     } finally {
@@ -358,7 +363,11 @@ export function App() {
         setProcessingProgress(Math.round(((index + 1) / playableSequences.length) * 100));
         await nextPaint();
       }
-      await playPcm(mixPcm(rendered), `${playableSequences.length} sequences`, tracks, true, null);
+      const targetDuration = Math.max(
+        0,
+        ...tracks.map((track) => track.cellDurations.reduce((sum, value) => sum + Math.max(0, value), 0)),
+      );
+      await playPcm(mixPcm(rendered.map((audio) => fitPcmDuration(audio, targetDuration))), `${playableSequences.length} sequences`, tracks, true, null);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     } finally {
@@ -599,7 +608,7 @@ export function App() {
             <button className="quiet-button" type="button" onClick={randomizeGrid} disabled={!layers.length}>Randomize {gridRows}×{gridColumns}</button>
             <button className="icon-button" type="button" onClick={removeActiveSequence} disabled={sequencers.length <= 1} aria-label="Remove active sequence">×</button>
           </div>
-          <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Base length (s) <input type="number" min="0.05" max="60" step="0.05" value={activeSequencer?.baseLengthSeconds ?? 1} onChange={(event) => updateSequence({ baseLengthSeconds: Math.max(0.05, Math.min(60, Number(event.target.value))) })} /></label><label>Gap (s) <input type="number" min="0" max="60" step="0.05" value={activeSequencer?.gapLengthSeconds ?? 0} onChange={(event) => updateSequence({ gapLengthSeconds: Math.max(0, Math.min(60, Number(event.target.value))) })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label><label className="toggle sequence-loop">Loop layers <input type="checkbox" checked={activeSequencer?.loopLayers !== false} onChange={(event) => updateSequence({ loopLayers: event.target.checked })} /></label></div>
+          <div className="sequence-toolbar"><label>Name <input value={activeSequencer?.name ?? ""} onChange={(event) => updateSequence({ name: event.target.value })} /></label><label>Base length (s) <input type="number" min="0.05" max="60" step="0.05" value={activeSequencer?.baseLengthSeconds ?? 1} onChange={(event) => updateSequence({ baseLengthSeconds: Math.max(0.05, Math.min(60, Number(event.target.value))) })} /></label><label>Gap (s) <input type="number" min="0" max="60" step="0.05" value={activeSequencer?.gapLengthSeconds ?? 0} onChange={(event) => updateSequence({ gapLengthSeconds: Math.max(0, Math.min(60, Number(event.target.value))) })} /></label><label>Cells <input type="number" min="1" max="64" value={activeSequencer?.steps.length ?? 0} onChange={(event) => setCellCount(Number(event.target.value))} disabled={!layers.length} /></label><label className="toggle sequence-loop">Loop layers <input type="checkbox" checked={activeSequencer?.loopLayers !== false} onChange={(event) => updateSequence({ loopLayers: event.target.checked })} /></label><label className="toggle sequence-loop">Loop sequence <input type="checkbox" checked={activeSequencer?.loopSequence === true} onChange={(event) => updateSequence({ loopSequence: event.target.checked })} /></label></div>
           <div className="sequence-matrix" aria-label="All sequences">
             {sequencers.map((sequence) => {
               const isActive = sequence.id === activeSequencer?.id;

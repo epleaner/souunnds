@@ -4,6 +4,7 @@ import {
   applyPlaybackAdsr,
   decodeWav,
   encodeWav,
+  fitPcmDuration,
   generateArrangement,
   findAudibleStart,
   renderArrangement,
@@ -28,6 +29,14 @@ describe("audio core", () => {
     expect(decoded.channels).toBe(1);
     expect(decoded.samples.length).toBe(16);
     expect(decoded.samples[15]).toBeCloseTo(15 / 16, 3);
+  });
+
+  it("fits PCM audio to a shared playback duration", () => {
+    const audio = toneAudio();
+    const fitted = fitPcmDuration(audio, 3);
+    expect(fitted.samples.length).toBe(24);
+    expect([...fitted.samples.slice(0, audio.samples.length)]).toEqual([...audio.samples]);
+    expect(fitted.samples.slice(audio.samples.length).every((sample) => sample === 0)).toBe(true);
   });
 
   it("stretches the selected segment once", () => {

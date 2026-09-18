@@ -93,6 +93,7 @@ export interface Sequencer {
   baseLengthSeconds?: number;
   gapLengthSeconds?: number;
   loopLayers?: boolean;
+  loopSequence?: boolean;
   steps: SequenceStep[];
 }
 
@@ -120,6 +121,15 @@ export const DEFAULT_PARAMS: StretchParams = {
 
 export function frameCount(audio: PcmAudio): number {
   return Math.floor(audio.samples.length / audio.channels);
+}
+
+export function fitPcmDuration(audio: PcmAudio, durationSeconds: number): PcmAudio {
+  const targetFrames = Math.max(1, Math.round(positive(durationSeconds, 0) * audio.sampleRate));
+  const targetSamples = targetFrames * audio.channels;
+  if (audio.samples.length === targetSamples) return audio;
+  const samples = new Float32Array(targetSamples);
+  samples.set(audio.samples.subarray(0, targetSamples));
+  return { ...audio, samples };
 }
 
 function clamp(value: number, min: number, max: number): number {
