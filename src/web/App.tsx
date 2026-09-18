@@ -367,7 +367,7 @@ export function App() {
         0,
         ...tracks.map((track) => track.cellDurations.reduce((sum, value) => sum + Math.max(0, value), 0)),
       );
-      await playPcm(mixPcm(rendered.map((audio) => fitPcmDuration(audio, targetDuration))), `${playableSequences.length} sequences`, tracks, true, null);
+      await playPcm(mixPcm(rendered.map((audio) => fitPcmDuration(audio, targetDuration))), `${playableSequences.length} sequences`, tracks, true, null, activeSequencer?.loopSequence === true);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     } finally {

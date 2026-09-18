@@ -71,3 +71,4 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Play all now reuses each rendered layer across sequences to avoid repeated WASM renders and browser aborts on larger grids.
 - Play all now pads shorter rendered sequences to the longest track duration so every mixed row shares one playback length.
 - Active sequence playback now has a separate Loop sequence toggle; main-thread WASM rendering remains serialized because the upstream Emscripten module is synchronous and shared.
+- Play all now forwards the active sequence's Loop sequence setting to the mixed playback buffer.
