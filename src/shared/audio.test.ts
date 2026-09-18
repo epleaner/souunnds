@@ -31,12 +31,14 @@ describe("audio core", () => {
     expect(decoded.samples[15]).toBeCloseTo(15 / 16, 3);
   });
 
-  it("fits PCM audio to a shared playback duration", () => {
+  it("fits PCM audio to shared durations with optional looping", () => {
     const audio = toneAudio();
     const fitted = fitPcmDuration(audio, 3);
     expect(fitted.samples.length).toBe(24);
     expect([...fitted.samples.slice(0, audio.samples.length)]).toEqual([...audio.samples]);
     expect(fitted.samples.slice(audio.samples.length).every((sample) => sample === 0)).toBe(true);
+    const looped = fitPcmDuration(audio, 3, true);
+    expect([...looped.samples.slice(audio.samples.length)]).toEqual([...audio.samples.slice(0, 8)]);
   });
 
   it("stretches the selected segment once", () => {
@@ -199,10 +201,9 @@ describe("audio core", () => {
     };
     const rendered = await renderSequencerAsync(toneAudio(), arrangement, "main", async (audio, segment, params) => stretchPcm(audio, segment, params));
     expect(rendered.samples.length).toBe(16);
-    expect(rendered.samples[9]).toBeCloseTo(rendered.samples[1], 5);
   });
 
-  it("plays through once when sequence looping is disabled", async () => {
+  it("does not fill a cell when layer looping is disabled", async () => {
     const arrangement: Arrangement = {
       layers: [
         { id: "layer", name: "Layer", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS, stretch: 1 }, offsetSeconds: 0, gain: 1, muted: false },

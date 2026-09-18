@@ -123,12 +123,18 @@ export function frameCount(audio: PcmAudio): number {
   return Math.floor(audio.samples.length / audio.channels);
 }
 
-export function fitPcmDuration(audio: PcmAudio, durationSeconds: number): PcmAudio {
+export function fitPcmDuration(audio: PcmAudio, durationSeconds: number, loop = false): PcmAudio {
   const targetFrames = Math.max(1, Math.round(positive(durationSeconds, 0) * audio.sampleRate));
   const targetSamples = targetFrames * audio.channels;
   if (audio.samples.length === targetSamples) return audio;
   const samples = new Float32Array(targetSamples);
-  samples.set(audio.samples.subarray(0, targetSamples));
+  if (!audio.samples.length || !loop) {
+    samples.set(audio.samples.subarray(0, targetSamples));
+    return { ...audio, samples };
+  }
+  for (let index = 0; index < targetSamples; index += 1) {
+    samples[index] = audio.samples[index % audio.samples.length];
+  }
   return { ...audio, samples };
 }
 

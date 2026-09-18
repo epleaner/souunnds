@@ -20,7 +20,8 @@ import {
 import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
 const MAIN_SEQUENCE_ID = "main-sequencer";
 
-type SequencePlayback = { tracks: Array<{ sequenceId: string; cellDurations: number[] }>; startedAt: number; simultaneous: boolean; loop: boolean };
+type SequenceTrack = { sequenceId: string; cellDurations: number[]; loop: boolean };
+type SequencePlayback = { tracks: SequenceTrack[]; startedAt: number; simultaneous: boolean; loop: boolean };
 type ResizeState = { sequenceId: string; index: number; edge: "left" | "right"; startX: number; initialLength: number; pixelsPerLength: number };
 
 function formatSeconds(seconds: number): string {
@@ -159,6 +160,34 @@ export function App() {
   const [adsr, setAdsr] = useState<PlaybackAdsr>({ ...DEFAULT_PLAYBACK_ADSR });
   const contextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+
+  const renderCacheRef = useRef<{ source: PcmAudio | null; entries: Map<string, Promise<PcmAudio>> }>({
+    source: null,
+    entries: new Map(),
+  });
+
+  async function renderLayerCached(audio: PcmAudio, segment: Layer["segment"], params: Layer["params"]): Promise<PcmAudio> {
+    const cache = renderCacheRef.current;
+    if (cache.source !== audio) {
+      cache.source = audio;
+      cache.entries.clear();
+    }
+    const key = JSON.stringify([segment.start, segment.end, params.stretch, params.windowSeconds, params.overlap, params.onset, params.seed]);
+    const cached = cache.entries.get(key);
+    if (cached) return cached;
+    if (cache.entries.size >= 64) {
+      const oldest = cache.entries.keys().next().value;
+      if (oldest) cache.entries.delete(oldest);
+    }
+    const pending = stretchForPlayback(audio, segment, params);
+    cache.entries.set(key, pending);
+    try {
+      return await pending;
+    } catch (error) {
+      cache.entries.delete(key);
+      throw error;
+    }
+  }
   const resizeRef = useRef<ResizeState | null>(null);
 
   const layerNames = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.name])), [layers]);
@@ -179,7 +208,9 @@ export function App() {
       let cursor = 0;
       const progress = sequencePlayback.tracks.map((track) => {
         const duration = trackDuration(track);
-        const trackElapsed = sequencePlayback.simultaneous ? elapsed : Math.max(0, elapsed - cursor);
+        const trackElapsed = sequencePlayback.simultaneous
+          ? track.loop && duration > 0 ? elapsed % duration : elapsed
+          : track.loop && duration > 0 ? Math.max(0, elapsed - cursor) % duration : Math.max(0, elapsed - cursor);
         let localCursor = 0;
         let result = { sequenceId: track.sequenceId, index: Math.max(0, track.cellDurations.length - 1), fraction: 1 };
         for (let index = 0; index < track.cellDurations.length; index += 1) {
@@ -285,7 +316,7 @@ export function App() {
     try {
       const playbackArrangement = arrangementForPlayback();
       const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
-      const rendered = await stretchForPlayback(source, playableLayer.segment, playableLayer.params);
+      const rendered = await renderLayerCached(source, playableLayer.segment, playableLayer.params);
       setProcessingProgress(100);
       await playPcm(rendered, playableLayer.name);
     } catch (error) {
@@ -304,7 +335,7 @@ export function App() {
       const playbackArrangement = arrangementForPlayback();
       let completed = 0;
       const renderWithProgress = async (input: PcmAudio, segment: Layer["segment"], params: Layer["params"]): Promise<PcmAudio> => {
-        const rendered = await stretchForPlayback(input, segment, params);
+        const rendered = await renderLayerCached(input, segment, params);
         completed += 1;
         setProcessingProgress(Math.round((completed / playbackArrangement.layers.length) * 100));
         await nextPaint();
@@ -328,7 +359,7 @@ export function App() {
       const requiredLayerCount = new Set(activeSequencer.steps.map((step) => step.targetId)).size || 1;
       let completed = 0;
       const renderWithProgress = async (input: PcmAudio, segment: Layer["segment"], params: Layer["params"]): Promise<PcmAudio> => {
-        const rendered = await stretchForPlayback(input, segment, params);
+        const rendered = await renderLayerCached(input, segment, params);
         completed += 1;
         setProcessingProgress(Math.min(95, Math.round((completed / requiredLayerCount) * 95)));
         await nextPaint();
@@ -336,7 +367,7 @@ export function App() {
       };
       const rendered = await renderSequencerAsync(source, playbackArrangement, activeSequencer.id, renderWithProgress, adsr);
       setProcessingProgress(100);
-      await playPcm(rendered, activeSequencer.name, [{ sequenceId: activeSequencer.id, cellDurations }], false, null, activeSequencer.loopSequence === true);
+      await playPcm(rendered, activeSequencer.name, [{ sequenceId: activeSequencer.id, cellDurations, loop: activeSequencer.loopSequence === true }], false, null, activeSequencer.loopSequence === true);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     } finally {
@@ -353,13 +384,14 @@ export function App() {
     try {
       const playbackArrangement = arrangementForPlayback();
       const rendered: PcmAudio[] = [];
-      const tracks = playableSequences.map((sequence) => ({
+      const tracks: SequenceTrack[] = playableSequences.map((sequence) => ({
         sequenceId: sequence.id,
         cellDurations: sequenceCellDurations(source, playbackArrangement, sequence.id),
+        loop: sequence.loopSequence === true,
       }));
       const renderedLayers = new Map<string, PcmAudio>();
       for (const [index, sequence] of playableSequences.entries()) {
-        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback, adsr, renderedLayers));
+        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, renderLayerCached, adsr, renderedLayers));
         setProcessingProgress(Math.round(((index + 1) / playableSequences.length) * 100));
         await nextPaint();
       }
@@ -367,7 +399,14 @@ export function App() {
         0,
         ...tracks.map((track) => track.cellDurations.reduce((sum, value) => sum + Math.max(0, value), 0)),
       );
-      await playPcm(mixPcm(rendered.map((audio) => fitPcmDuration(audio, targetDuration))), `${playableSequences.length} sequences`, tracks, true, null, activeSequencer?.loopSequence === true);
+      await playPcm(
+        mixPcm(rendered.map((audio, index) => fitPcmDuration(audio, targetDuration, playableSequences[index].loopSequence === true))),
+        `${playableSequences.length} sequences`,
+        tracks,
+        true,
+        null,
+        playableSequences.every((sequence) => sequence.loopSequence === true),
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Sequence playback failed.");
     } finally {

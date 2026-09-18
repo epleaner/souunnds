@@ -37,7 +37,7 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - `src/web/paulstretch.ts` loads the generated upstream Emscripten module; arrangement and sequencer policy remains in TypeScript.
 - `npm run build:core`, `npm run build:wasm`, upstream CTest, `npm test`, `npm run build`, native CLI smoke, and browser WASM preview/layer/sequence smoke all passed.
 - Upstream is GPL-2.0. Generated WASM is ignored and must be produced with `npm run build:wasm` before browser preview.
-- Current change bead: `tunestretch-b8d`.
+- Current change bead: `tunestretch-f76`.
 - CLI now accepts `.mp3` and other non-WAV inputs through temporary ffmpeg normalization before upstream rendering.
 - Web source copy and file picker explicitly communicate MP3/WAV local support.
 - Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
@@ -72,3 +72,5 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Play all now pads shorter rendered sequences to the longest track duration so every mixed row shares one playback length.
 - Active sequence playback now has a separate Loop sequence toggle; main-thread WASM rendering remains serialized because the upstream Emscripten module is synchronous and shared.
 - Play all now forwards the active sequence's Loop sequence setting to the mixed playback buffer.
+- Completed layer renders are cached by source and render parameters, so repeated Play all and preview actions skip unchanged WASM work.
+- Play all now repeats rows with Loop sequence enabled within the shared mix duration and loops the whole mix when every playable row is enabled.
