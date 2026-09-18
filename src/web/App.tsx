@@ -302,6 +302,7 @@ export function App() {
         const rendered = await stretchForPlayback(input, segment, params);
         completed += 1;
         setProcessingProgress(Math.round((completed / playbackArrangement.layers.length) * 100));
+        await nextPaint();
         return rendered;
       };
       await playPcm(await renderArrangementAsync(source, playbackArrangement, renderWithProgress), `${layers.length} layers`);
@@ -325,6 +326,7 @@ export function App() {
         const rendered = await stretchForPlayback(input, segment, params);
         completed += 1;
         setProcessingProgress(Math.min(95, Math.round((completed / requiredLayerCount) * 95)));
+        await nextPaint();
         return rendered;
       };
       const rendered = await renderSequencerAsync(source, playbackArrangement, activeSequencer.id, renderWithProgress, adsr);
@@ -353,6 +355,7 @@ export function App() {
       for (const [index, sequence] of playableSequences.entries()) {
         rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, stretchForPlayback, adsr));
         setProcessingProgress(Math.round(((index + 1) / playableSequences.length) * 100));
+        await nextPaint();
       }
       await playPcm(mixPcm(rendered), `${playableSequences.length} sequences`, tracks, true, null);
     } catch (error) {

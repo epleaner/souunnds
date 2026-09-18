@@ -13,10 +13,10 @@ export interface PlaybackAdsr {
 }
 
 export const DEFAULT_PLAYBACK_ADSR: PlaybackAdsr = {
-  attackSeconds: 0.01,
-  decaySeconds: 0.08,
-  sustainLevel: 0.85,
-  releaseSeconds: 0.12,
+  attackSeconds: 1,
+  decaySeconds: 0.8,
+  sustainLevel: 0.7,
+  releaseSeconds: 2,
 };
 
 function playbackAdsrGain(
