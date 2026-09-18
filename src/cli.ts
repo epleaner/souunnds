@@ -14,7 +14,7 @@ const PASSTHROUGH_OPTIONS: Record<string, true> = {
 };
 
 function printHelp(): void {
-  console.log(`tunestretch — upstream Paulstretch CLI wrapper
+  console.log(`souunnds — upstream Paulstretch CLI wrapper
 
 Usage:
   npm run build:core
@@ -69,7 +69,7 @@ function cropAndLoop(audio: PcmAudio, start: number, end: number, loops: number)
 }
 
 function nativeBinary(): string {
-  const configured = process.env.TUNESTRETCH_NATIVE;
+  const configured = process.env.SOUUNNDS_NATIVE;
   const defaultName = process.platform === "win32" ? "paulstretch.exe" : "paulstretch";
   const binary = configured ?? resolve(ROOT, "vendor/libpaulstretch/build-native", defaultName);
   if (!existsSync(binary)) {
@@ -139,7 +139,7 @@ async function main(): Promise<void> {
   if (!outputPath) outputPath = `${basename(inputPath, extname(inputPath))}-stretched.wav`;
   if (!Number.isInteger(loops) || loops < 1) throw new Error("--loops must be a positive integer.");
 
-  const temporaryDirectory = await mkdtemp(join(tmpdir(), "tunestretch-"));
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "souunnds-"));
   try {
     let decodedInput = resolve(inputPath);
     if (extname(inputPath).toLowerCase() !== ".wav") {

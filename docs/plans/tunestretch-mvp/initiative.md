@@ -1,4 +1,4 @@
-# Tunestretch MVP initiative
+# souunnds MVP initiative
 
 ## Goal
 Create a runnable local-file audio tool with a TypeScript CLI and a simple browser UI for Paulstretch-style time stretching, segment looping, layered playback, generative arrangements, and sequencer composition.
@@ -36,8 +36,8 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - `src/cli.ts` now crops/loops segments locally, then invokes the upstream native `paulstretch` executable.
 - `src/web/paulstretch.ts` loads the generated upstream Emscripten module; arrangement and sequencer policy remains in TypeScript.
 - `npm run build:core`, `npm run build:wasm`, upstream CTest, `npm test`, `npm run build`, native CLI smoke, and browser WASM preview/layer/sequence smoke all passed.
-- Upstream is GPL-2.0. Generated WASM is ignored and must be produced with `npm run build:wasm` before browser preview.
-- Current change bead: `tunestretch-f76`.
+- Upstream is GPL-2.0. The generated WASM runtime is checked in so Railway can deploy the browser client from a clean checkout.
+- Current change bead: `tunestretch-cft`.
 - CLI now accepts `.mp3` and other non-WAV inputs through temporary ffmpeg normalization before upstream rendering.
 - Web source copy and file picker explicitly communicate MP3/WAV local support.
 - Web styling now uses a Swiss-inspired paper/ink/red system with grid-led layout, hairline rules, square controls, and responsive compact states.
@@ -74,3 +74,4 @@ Create a runnable local-file audio tool with a TypeScript CLI and a simple brows
 - Play all now forwards the active sequence's Loop sequence setting to the mixed playback buffer.
 - Completed layer renders are cached by source and render parameters, so repeated Play all and preview actions skip unchanged WASM work.
 - Play all now repeats rows with Loop sequence enabled within the shared mix duration and loops the whole mix when every playable row is enabled.
+- Rename/deployment scope: project branding and package metadata become `souunnds`; the private GitHub `souunnds` repository is pushed on `main`; Railway and Porkbun must verify `https://souunnds.elipleaner.com/` before completion.

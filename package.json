@@ -1,10 +1,10 @@
 {
-  "name": "tunestretch",
+  "name": "souunnds",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "start": "node server.mjs",
     "build": "tsc --noEmit && vite build",
     "build:core": "node scripts/build-core.mjs",
     "build:wasm": "node scripts/build-wasm.mjs",

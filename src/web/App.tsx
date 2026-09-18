@@ -574,7 +574,7 @@ export function App() {
       <header className="hero">
         <div>
           <p className="eyebrow">LOCAL AUDIO LAB · 01</p>
-          <h1>Tunestretch</h1>
+          <h1>souunnds</h1>
         </div>
       </header>
 

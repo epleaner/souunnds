@@ -1,2 +1,1 @@
-*
-!.gitignore
+# WASM runtime is checked in for the static deployment.
