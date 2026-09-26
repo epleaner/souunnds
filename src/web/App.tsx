@@ -954,8 +954,8 @@ function RangeField({
   return (
     <label className={`range-field ${className}`.trim()}>
       <span className="range-field-label">{label}</span>
-      <output>{output}</output>
       <input aria-label={ariaLabel ?? label} type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <output>{output}</output>
     </label>
   );
 }

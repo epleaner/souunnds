@@ -1,6 +1,6 @@
 # Studio UI polish
 
-State: current; Bead `tunestretch-6q2` in progress, `ep/sources-section` started clean at `aa551c3`. Concurrent dropdown change is tracked by `tunestretch-2nl` and `docs/plans/themed-select/initiative.md`; select component owns only new files while this work touches existing App/CSS.
+State: original eight-item polish complete; Bead `tunestretch-6q2` closed and published at `a26f626` on `origin/ep/sources-section`. Follow-on slider consistency is tracked in Bead `tunestretch-txl`; themed dropdowns are tracked in closed Bead `tunestretch-2nl`.
 
 ## Goal and independent acceptance items
 1. Source rows: move Choose audio to the right, directly left of each duration timestamp, including compact layout and empty/long filenames.
@@ -12,8 +12,8 @@ State: current; Bead `tunestretch-6q2` in progress, `ep/sources-section` started
 7. Effect labels: Pre-delay and Wet / dry, along with the other effect slider labels, remain on one line without breaking label/output alignment.
 8. ADSR/effect spacing: every adjacent slider row, including the ADSR-to-Reverb transition and compact stacked effect sliders, uses the same vertical gap.
 
-## Evidence and plan
-The source row markup currently renders Choose audio before `.source-row-actions`, which contains duration. `.source-row` uses a five-track grid at `styles.css:122-156` with a compact override near `:1190`. `.layer-row` has a bottom border at `:320-324`; section also has a bottom border. `.sequence-section` reserves `min-height:228.5px` at `:538-545`. `.adsr-controls` has `gap:8px`, ADSR sliders use `64px + 10px` left track and `48px` right track; effects rows currently use 48px/64px title tracks and a separate grid with `auto/38px` subtracks around effects sliders (`:910-998`). Playback's `playbackTargetIncludes` treats every unmuted layer as included in the all-layers target; `toggleTargetPlayback` resumes a paused included target (`App.tsx:1710-1726`).
+## Initial evidence and decision
+Before these changes, Choose audio preceded the source row actions, the last layer and section both drew bottom borders, the sequence section reserved extra height, ADSR/effect gaps differed, and inclusive playback matching resumed the aggregate on a row click.
 
 Decision and implementation: move Choose audio into the row action group immediately before duration; treat only exact targets as the same playback target for toggling and button state, so a row never inherits the aggregate's pause/resume state; remove the last layer row's border and sequence minimum height/flex growth; align effect labels and outputs to the ADSR tracks with matching grid gaps. For added feedback, remove only the last sequence grid's bottom border (retaining the section boundary) and keep effect labels on one line with enough slider track room to preserve the right output edge. Both native select callsites were migrated by the concurrent themed-select work.
 
@@ -26,4 +26,9 @@ Decision and implementation: move Choose audio into the row action group immedia
 - First sequence grid retained its 0.6667px bottom border; last grid computed 0px and the section retained its single 0.6667px boundary at 1289px and 320px. Browser screenshot showed a single bottom line under the final timeline.
 - Pre-delay and both Wet / dry labels rendered on one 15.6px line at 1289px and 320px with no slider/label overlap; their Reverb/Delay output right edges still matched the ADSR output (x908 and x308), and scroll width matched each viewport.
 - All measured gaps between slider rows were 6 rendered px at both 1289px and 320px, including ADSR rows, the transition into Reverb, individual compact effect controls, and transitions between effects. The formerly 8px/10px responsive effects gaps were removed.
-- Final `npm run build`, `npm test` (18/18), and `git diff --check` passed; browser console/errors empty. Next action: publish the verified diff and close Bead `tunestretch-6q2`.
+- Original polish: `npm run build`, `npm test` (18/18), and staged `git diff --check` passed; browser console/errors empty. Published at `a26f626`; Bead `tunestretch-6q2` closed.
+
+## Slider consistency follow-on
+Bead `tunestretch-txl` unifies the shared `RangeField` presentation: label → slider → value in DOM and on screen; one 4 CSS px column gap and zero default range-input margin make every visible slider/value gap 6 rendered px at the 1.5× UI scale. The existing shared track/thumb styles remain identical for layer, ADSR, and effects sliders. ADSR's label track preserves its slider x129/x126 alignment to effect labels at 1289px/320px.
+
+At widths up to 1200px, five layer controls reflow to two columns instead of squeezing the Stretch slider to zero width; below 480px they use one column. Values remain visible at 800px, 1200px, 320px, and 1289px, with no horizontal overflow; the minimum observed Stretch track at 800px measured 65px. Browser inspection found all 49 rendered controls ordered label/slider/value with the same 6px slider/value gap at both 1289px and 320px. Keyboard ArrowRight updated Layer 1 gain from 0.8/-1.94dB to 0.85/-1.41dB and Reverb decay from 2.4s to 2.5s; ArrowLeft restored both. Pointer adjustment at 800px changed Stretch from 8 to 34.5 and Reverb decay from 2.4s to 7.0s; both were restored. `npm run build`, `npm test` (18/18), and `git diff --check` passed; browser errors empty. Next action: publish and close `tunestretch-txl`.

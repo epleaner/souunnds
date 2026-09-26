@@ -1,6 +1,6 @@
 # Themed select control
 
-State: current; Bead `tunestretch-2nl` in progress; clean `ep/sources-section` started at `aa551c3`.
+State: complete; Bead `tunestretch-2nl` closed; implementation published at `a26f626` on `origin/ep/sources-section`.
 
 ## Goal and scope
 Replace both native `<select>` controls in `src/web/App.tsx` with one themed, accessible dropdown: layer audio source and sequence clip layer target. Keep their controlled values, callbacks, disabled/unavailable sources, `src` prefix, selected layer color, and compact sizing. Non-goals: file/number inputs and the existing generate/action popovers.
@@ -14,11 +14,11 @@ Replace both native `<select>` controls in `src/web/App.tsx` with one themed, ac
 - A dropdown in a scrolled layer list and a clip inspector remains visible within the viewport; at 1289px and 320px there is no horizontal overflow. Empty/disabled options and long labels remain legible.
 - Real browser import of two sources and layer/clip changes proves model integration; `npm test`, `npm run build`, and focused diff checks pass.
 
-## Current evidence and next action
+## Implementation evidence
 The source and clip controls both use the single `ThemedSelect` implementation; the old native selectors and markup are gone. No package manifest or lockfile change was needed after the npm registry timed out. The body-zoomed app requires converting trigger viewport coordinates to unzoomed CSS pixels for the portaled popup; its focused positioning code handles this and stays outside the clipped layer list.
 
 ## Verification
 - In a browser with two imported WAVs, selecting a source changed its layer trigger and selecting Layer 2 in the clip inspector changed the clip label and swatch while leaving the inspector open. No native `<select>` remained in source or rendered DOM; the source retains its `src` prefix.
 - The source dropdown opened by pointer and keyboard, ArrowDown/Home/End and typeahead moved the active option, Enter committed, Escape dismissed without changing selection, Tab moved focus, and selection returned focus to the trigger. The disabled empty source could not be chosen by pointer or keyboard; outside click dismissed the menu.
 - At 1289px, the source popup fit under its trigger (x801.75–1134.5) and a popup for the last of seven layers remained visible outside a scrolled layer list. At 320px, the popup fit x8–312 and document scroll width stayed 320px. The clip popup remained visible within its inspector at 320px.
-- Final `npm run build`, `npm test` (18/18), and `git diff --check` passed; browser console/errors empty. Next action: publish the verified diff and close Bead `tunestretch-2nl`.
+- Final `npm run build`, `npm test` (18/18), and staged `git diff --check` passed; browser console/errors empty. Implementation published at `a26f626`; no open follow-up.

@@ -401,12 +401,14 @@ button:focus-visible, input:focus-visible {
   align-items: center;
   gap: 5px;
 }
+.range-field { column-gap: 4px; }
 .range-field input[type="range"] {
   width: 100%;
   min-width: 0;
   height: 2px;
   padding: 0;
   border: 0;
+  margin: 0;
   background: transparent;
   appearance: none;
   -webkit-appearance: none;
@@ -441,9 +443,8 @@ button:focus-visible, input:focus-visible {
   display: grid;
   min-width: 0;
   overflow: hidden;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 3px;
   color: var(--muted);
   font: 500 9px/1.3 var(--mono);
   letter-spacing: .08em;
@@ -852,9 +853,8 @@ input[type="number"], input[type="text"] {
 .adsr-grid { row-gap: 4px; }
 .adsr-grid .range-field {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 48px;
+  grid-template-columns: 72px minmax(0, 1fr) 48px;
   align-items: center;
-  column-gap: 10px;
 }
 .adsr-grid .range-field-label {
   grid-column: 1;
@@ -910,7 +910,6 @@ input[type="number"], input[type="text"] {
   min-width: 0;
   grid-template-columns: auto minmax(25px, 1fr) 38px;
   align-items: center;
-  column-gap: 4px;
 }
 .effect-row .range-field-label {
   grid-column: 1;
@@ -995,6 +994,17 @@ input[type="number"], input[type="text"] {
 @media (max-width: 1350px) {
   .generator-popover { grid-template-columns: 1fr; }
 }
+@media (max-width: 1200px) {
+  .layer-row-main { height: auto; padding-block: 6px; }
+  .layer-inline-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 8px; }
+  .layer-color-marker {
+    top: 9px;
+    left: 6px;
+    width: 6px;
+    height: 6px;
+    transform: none;
+  }
+}
 @media (max-width: 960px) {
   .section-action-row { align-items: center; }
   .section-action-group { flex-wrap: nowrap; justify-content: flex-end; padding: 0; }
@@ -1007,11 +1017,6 @@ input[type="number"], input[type="text"] {
   .layer-row-main,
   .sequence-row { padding-inline: 3px; }
   .layer-row-main { padding-left: 12px; }
-  .layer-inline-fields {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 2px;
-  }
-  .layer-inline-fields output { display: none; }
   .layer-row-actions { gap: 2px; }
   .section-action-group > .make-button,
   .section-action-group > .popover-trigger { padding-inline: 5px; }
@@ -1051,10 +1056,8 @@ input[type="number"], input[type="text"] {
   .effects-grid { overflow-x: visible; }
   .layer-row { min-width: 0; }
   .layer-row-main {
-    height: auto;
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
-    padding-block: 6px;
   }
   .layer-row-actions {
     grid-column: 1;
@@ -1139,15 +1142,7 @@ input[type="number"], input[type="text"] {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
   }
-  .layer-inline-fields output { display: block; }
   .layer-row-main { padding-left: 18px; }
-  .layer-color-marker {
-    top: 9px;
-    left: 6px;
-    width: 6px;
-    height: 6px;
-    transform: none;
-  }
   .sequence-grid { height: 24px; }
   .sequence-cell { min-width: 6px; }
   .sequence-cell-edge {
