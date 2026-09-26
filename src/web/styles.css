@@ -396,20 +396,29 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .layer-src-label {
   display: flex;
   flex-direction: row;
-  align-items: center;
-  gap: 3px;
+  align-items: stretch;
+  gap: 0;
+  height: 20px;
+  border: 1px solid var(--line);
+  background: var(--surface);
   color: var(--muted);
   font: 9px/1 var(--mono);
+}
+.layer-src-label span {
+  display: flex;
+  align-items: center;
+  padding-inline: 4px;
+  border-right: 1px solid var(--line);
 }
 .layer-src-label select {
   width: 96px;
   min-width: 0;
-  height: 20px;
+  height: 100%;
   padding: 1px 2px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: 0;
   color: var(--text);
-  background: var(--surface);
+  background: transparent;
   font: 9px/1 var(--mono);
 }
 .layer-inline-fields {
@@ -1215,7 +1224,7 @@ input[type="number"], input[type="text"], select {
   .cell-settings-subtitle { padding-bottom: 4px; font-size: 8px; }
 }
 @media (max-width: 360px) {
-  .source-row { grid-template-columns: 45px minmax(0, 1fr) auto; padding-block: 4px; }
+  .source-row { grid-template-columns: 45px minmax(0, max-content) auto minmax(0, 1fr); padding-block: 4px; }
   .source-row-actions { grid-column: 2 / -1; grid-row: 2; justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {
