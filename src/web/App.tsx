@@ -18,6 +18,7 @@ import {
 } from "../shared/audio";
 import { isPastelLayerColor, nextPastelLayerColor } from "../shared/layer-colors";
 import { loadPaulstretchModule, stretchWithPaulstretch } from "./paulstretch";
+import { ThemedSelect } from "./ThemedSelect";
 const MAIN_SEQUENCE_ID = "main-sequencer";
 const SOURCE_FILE_NAME_STORAGE_KEY = "souunnds.source-file-name";
 const STUDIO_STATE_STORAGE_KEY = "souunnds.studio-state";
@@ -1297,6 +1298,16 @@ export function App() {
 
   const layerNames = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.name])), [layers]);
   const layerColors = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.color])), [layers]);
+  const sourceSelectOptions = useMemo(() => sources.map((item, index) => ({
+    value: item.id,
+    label: `${index + 1} · ${item.name || "Choose audio"}`,
+    disabled: !item.audio,
+  })), [sources]);
+  const layerSelectOptions = useMemo(() => layers.map((layer) => ({
+    value: layer.id,
+    label: layer.name,
+    color: layer.color,
+  })), [layers]);
 
 
   useEffect(() => {
@@ -1424,7 +1435,7 @@ export function App() {
     const closePopovers = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      if (target.closest(".cell-inspector, .sequence-cell-main, .sequence-duration-popover, .sequence-end-anchor")) return;
+      if (target.closest(".cell-inspector, .sequence-cell-main, .sequence-duration-popover, .sequence-end-anchor, .themed-select-content")) return;
       setSelectedCellOpen(false);
       setSequenceDurationMenuId(null);
     };
@@ -1707,19 +1718,8 @@ export function App() {
     setStatus("Playback resumed.");
   }
 
-  function playbackTargetIncludes(target: PlaybackTarget): boolean {
-    if (playbackTargetMatches(playbackTarget, target)) return true;
-    if (playbackTarget?.kind === "layers" && target.kind === "layer") {
-      return layers.some((layer) => layer.id === target.id && !layer.muted);
-    }
-    if (playbackTarget?.kind === "sequences" && target.kind === "sequence") {
-      return sequencers.some((sequence) => sequence.id === target.id && !sequence.muted);
-    }
-    return false;
-  }
-
   async function toggleTargetPlayback(target: PlaybackTarget, start: () => Promise<void>): Promise<void> {
-    if (playbackTargetIncludes(target)) {
+    if (playbackTargetMatches(playbackTarget, target)) {
       if (playing) return pausePlayback();
       if (paused) return resumePlayback();
     }
@@ -1727,7 +1727,7 @@ export function App() {
   }
 
   function targetPlaybackState(target: PlaybackTarget): { isPlaying: boolean; isPaused: boolean } {
-    const active = playbackTargetIncludes(target);
+    const active = playbackTargetMatches(playbackTarget, target);
     return { isPlaying: active && playing, isPaused: active && paused };
   }
 
@@ -2509,11 +2509,11 @@ export function App() {
                     ))}
                   />
                 ) : <span className="source-empty-name" aria-hidden="true" />}
-                <button className="source-picker-button label-caps" type="button" onClick={() => chooseAudio(item.id)} aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
-                  <span className="wide-control-label">Choose audio</span>
-                  <span className="compact-control-label">Audio</span>
-                </button>
                 <div className="source-row-actions">
+                  <button className="source-picker-button label-caps" type="button" onClick={() => chooseAudio(item.id)} aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
+                    <span className="wide-control-label">Choose audio</span>
+                    <span className="compact-control-label">Audio</span>
+                  </button>
                   <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                   <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
                   <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
@@ -2575,24 +2575,21 @@ export function App() {
                       <div className="layer-trigger-controls">
                         <kbd className="layer-trigger-key" title={`Keyboard trigger ${LAYER_TRIGGER_BINDINGS[index]?.label ?? "unassigned"}`}>{LAYER_TRIGGER_BINDINGS[index]?.label ?? "—"}</kbd>
                         <PlayButton onClick={() => void toggleTargetPlayback({ kind: "layer", id: layer.id }, () => previewLayer(layer))} disabled={!sourceForLayer(layer)} ariaLabel={`Play ${layer.name}`} {...targetPlaybackState({ kind: "layer", id: layer.id })} />
-                        <label className="layer-src-label">
-                          <span>src</span>
-                          <select
-                            aria-label={`${layer.name} src`}
-                            value={layer.sourceId ?? sources.find((item) => item.audio)?.id ?? ""}
-                            onChange={(event) => {
-                              const selected = sources.find((item) => item.id === event.target.value);
-                              if (!selected) return;
-                              updateLayer(layer.id, {
-                                sourceId: selected.id,
-                                segment: { start: 0, end: Math.max(0.1, Math.min(selected.duration, 4)) },
-                              });
-                            }}
-                          >
-                            {!sources.some((item) => item.audio) && <option value="">No audio</option>}
-                            {sources.map((item, sourceIndex) => <option key={item.id} value={item.id} disabled={!item.audio}>{sourceIndex + 1} · {item.name || "Choose audio"}</option>)}
-                          </select>
-                        </label>
+                        <ThemedSelect
+                          variant="source"
+                          ariaLabel={`${layer.name} src`}
+                          value={layer.sourceId ?? sources.find((item) => item.audio)?.id ?? ""}
+                          options={sourceSelectOptions}
+                          placeholder="No audio"
+                          onValueChange={(value) => {
+                            const selected = sources.find((item) => item.id === value);
+                            if (!selected) return;
+                            updateLayer(layer.id, {
+                              sourceId: selected.id,
+                              segment: { start: 0, end: Math.max(0.1, Math.min(selected.duration, 4)) },
+                            });
+                          }}
+                        />
                         <IconButton
                           className="layer-trigger-mode"
                           pressed={layer.triggerMode === "gate"}
@@ -2749,16 +2746,13 @@ export function App() {
                                   <div className="cell-fields">
                                     <label>
                                       Layer source
-                                      <div className="layer-source-select">
-                                        <span
-                                          className="layer-source-color"
-                                          style={{ backgroundColor: layerColors.get(step.targetId) }}
-                                          aria-hidden="true"
-                                        />
-                                        <select aria-label="Clip layer source" value={step.targetId} onChange={(event) => updateStep(index, { targetId: event.target.value, targetType: "layer" }, sequence.id)}>
-                                          {layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}
-                                        </select>
-                                      </div>
+                                      <ThemedSelect
+                                        variant="clip"
+                                        ariaLabel="Clip layer source"
+                                        value={step.targetId}
+                                        options={layerSelectOptions}
+                                        onValueChange={(value) => updateStep(index, { targetId: value, targetType: "layer" }, sequence.id)}
+                                      />
                                     </label>
                                     <label>
                                       Duration

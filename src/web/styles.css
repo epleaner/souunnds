@@ -29,10 +29,10 @@ body {
   background: var(--bg);
   zoom: var(--ui-scale);
 }
-button, input, select { font: inherit; }
+button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .38; }
-button:focus-visible, input:focus-visible, select:focus-visible {
+button:focus-visible, input:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -123,7 +123,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   display: grid;
   min-width: 0;
   min-height: 32px;
-  grid-template-columns: 52px minmax(0, max-content) auto minmax(0, 1fr) auto;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding-inline: 12px 6px;
@@ -149,7 +149,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .source-empty-name { min-width: 0; }
 .source-duration { min-width: 52px; text-align: right; }
 .source-row-actions {
-  grid-column: 5;
+  grid-column: 3;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -212,12 +212,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .section-action-group > button[aria-expanded="true"] {
   border-left: 1px solid var(--line);
 }
-.layers-section button,
-.layers-section button:hover:not(:disabled),
-.layers-section button[aria-expanded="true"],
-.sequence-section button,
-.sequence-section button:hover:not(:disabled),
-.sequence-section button[aria-expanded="true"] {
+.layers-section button:not(.themed-select-trigger),
+.layers-section button:hover:not(:disabled):not(.themed-select-trigger),
+.layers-section button[aria-expanded="true"]:not(.themed-select-trigger),
+.sequence-section button:not(.themed-select-trigger),
+.sequence-section button:hover:not(:disabled):not(.themed-select-trigger),
+.sequence-section button[aria-expanded="true"]:not(.themed-select-trigger) {
   border: 0;
 }
 .sources-section .section-action-group > button,
@@ -322,6 +322,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   min-width: 0;
   border-bottom: 1px solid var(--line);
 }
+.layer-row:last-child { border-bottom: 0; }
 .layer-row-main {
   display: grid;
   height: 31px;
@@ -392,57 +393,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .layer-trigger-mode[aria-pressed="false"],
 .layer-trigger-mode[aria-pressed]:hover:not(:disabled) {
   color: var(--muted);
-}
-.layer-src-label {
-  --src-label-width: 25px;
-  position: relative;
-  display: flex;
-  height: 20px;
-  background: var(--surface);
-  color: var(--muted);
-  font: 9px/1 var(--mono);
-}
-/* Cover the native chevron without changing the select's full-size hit area. */
-.layer-src-label::before {
-  position: absolute;
-  z-index: 1;
-  top: 1px;
-  right: 1px;
-  bottom: 1px;
-  width: 16px;
-  background: var(--surface);
-  content: "";
-  pointer-events: none;
-}
-.layer-src-label::after {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  border: 1px solid var(--line);
-  content: "";
-  pointer-events: none;
-}
-.layer-src-label span {
-  position: absolute;
-  z-index: 1;
-  inset: 0 auto 0 0;
-  display: flex;
-  width: var(--src-label-width);
-  align-items: center;
-  padding-inline: 4px;
-  border-right: 1px solid var(--line);
-  pointer-events: none;
-}
-.layer-src-label select {
-  width: calc(96px + var(--src-label-width));
-  min-width: 0;
-  height: 100%;
-  padding: 1px 2px 1px calc(var(--src-label-width) + 2px);
-  border: 0;
-  border-radius: 0;
-  color: var(--text);
-  background: transparent;
-  font: 9px/1 var(--mono);
 }
 .layer-inline-fields {
   display: grid;
@@ -537,11 +487,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .sequence-section {
   display: flex;
-  min-height: 228.5px;
   flex-direction: column;
 }
-.sequence-section.is-empty,
-.sequence-section.is-collapsed { min-height: 0; }
 .sequence-section.is-empty .sequence-content { padding-block: 0; }
 .sequence-section.is-empty .empty-state {
   min-height: 24px;
@@ -550,7 +497,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .sequence-content {
   display: flex;
   min-width: 0;
-  flex: 1;
   flex-direction: column;
   padding: 0;
 }
@@ -602,31 +548,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   gap: 2px;
 }
 .cell-fields input[type="number"],
-.cell-fields select,
 .sequence-duration-popover input[type="number"] {
   height: 22px;
   padding: 2px 4px;
   border: 1px solid var(--line);
   background: var(--paper);
   color: var(--text);
-}
-.layer-source-select {
-  position: relative;
-}
-.layer-source-select select {
-  width: 100%;
-  padding-left: 18px;
-}
-.layer-source-color {
-  position: absolute;
-  top: 50%;
-  left: 6px;
-  z-index: 1;
-  width: 7px;
-  height: 7px;
-  transform: translateY(-50%);
-  border: 1px solid rgb(16 17 18 / .3);
-  pointer-events: none;
 }
 .duration-input-with-unit {
   display: grid;
@@ -760,7 +687,7 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
   opacity: .38;
 }
-input[type="number"], input[type="text"], select {
+input[type="number"], input[type="text"] {
   min-width: 0;
   width: 100%;
   padding: 4px 0;
@@ -792,6 +719,7 @@ input[type="number"], input[type="text"], select {
   border: 1px solid var(--line);
   background: var(--paper);
 }
+.sequence-row:last-child .sequence-grid { border-bottom: 0; }
 .row-icon-actions {
   position: relative;
   display: flex;
@@ -911,8 +839,9 @@ input[type="number"], input[type="text"], select {
   display: grid;
   min-width: 0;
   grid-column: 1;
-  align-self: stretch;
-  gap: 8px;
+  align-self: start;
+  grid-template-rows: max-content max-content;
+  row-gap: 4px;
 }
 .adsr-grid,
 .effects-grid {
@@ -920,6 +849,7 @@ input[type="number"], input[type="text"], select {
   min-width: 0;
   grid-template-columns: 1fr;
 }
+.adsr-grid { row-gap: 4px; }
 .adsr-grid .range-field {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr) 48px;
@@ -953,17 +883,17 @@ input[type="number"], input[type="text"], select {
 .effect-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: 64px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  column-gap: 12px;
 }
 .reverb-effect-row {
   min-width: 560px;
-  grid-template-columns: 48px repeat(4, minmax(0, 1fr));
+  grid-template-columns: 64px repeat(4, minmax(0, 1fr));
 }
 .delay-effect-row {
   min-width: 420px;
-  grid-template-columns: 48px repeat(3, minmax(0, 1fr));
+  grid-template-columns: 64px repeat(3, minmax(0, 1fr));
 }
 .compressor-effect-row {
   min-width: 436px;
@@ -978,7 +908,7 @@ input[type="number"], input[type="text"], select {
 .effect-row .range-field {
   display: grid;
   min-width: 0;
-  grid-template-columns: auto minmax(30px, 1fr) 38px;
+  grid-template-columns: auto minmax(25px, 1fr) 38px;
   align-items: center;
   column-gap: 4px;
 }
@@ -986,11 +916,14 @@ input[type="number"], input[type="text"], select {
   grid-column: 1;
   grid-row: 1;
   font-size: 8px;
+  white-space: nowrap;
 }
 .effect-row .range-field output {
   grid-column: 3;
   grid-row: 1;
+  margin: 0;
   font-size: 9px;
+  text-align: right;
 }
 .effect-row .range-field input[type="range"] {
   grid-column: 2;
@@ -1087,7 +1020,6 @@ input[type="number"], input[type="text"], select {
   .layer-list > .empty-state { padding-inline: 8px; }
   .sequence-library { grid-template-columns: 1fr 1fr; }
   .sequence-library-label { grid-column: 1 / -1; }
-  .adsr-grid, .effects-grid { grid-template-columns: 1fr; gap: 8px; }
   .adsr-content { padding-inline: 8px; }
   .envelope-graph { height: 220px; }
 }
@@ -1178,33 +1110,31 @@ input[type="number"], input[type="text"], select {
   .row-actions-menu.is-open > .row-actions-menu-panel {
     display: flex;
   }
-  .effects-grid { gap: 10px; }
   .effect-row,
   .reverb-effect-row,
   .delay-effect-row,
   .compressor-effect-row {
     min-width: 0;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 64px minmax(0, 1fr);
     align-items: start;
-    gap: 6px 8px;
+    gap: 4px 12px;
   }
-  .effect-name { grid-column: 1 / -1; }
+  .effect-row .range-field { grid-column: 2; }
 }
 @media (max-width: 480px) {
   .wide-control-label { display: none; }
   .compact-control-label { display: inline; }
-  .source-row { grid-template-columns: 45px minmax(0, max-content) auto minmax(0, 1fr) auto; gap: 3px; padding-inline: 6px; }
+  .source-row { grid-template-columns: 45px minmax(0, 1fr) auto; gap: 3px; padding-inline: 6px; }
   .source-duration { min-width: 38px; }
   .source-row-actions { gap: 2px; }
   .source-picker-button { padding-inline: 3px; font-size: 8px; }
   .source-row-actions .icon-button { width: 18px; }
-  .layer-src-label select { width: calc(72px + var(--src-label-width)); }
   .section-action-group > .make-button,
   .section-action-group > .popover-trigger { padding-inline: 4px; }
   .effect-row,
   .reverb-effect-row,
   .delay-effect-row,
-  .compressor-effect-row { grid-template-columns: minmax(0, 1fr); }
+  .compressor-effect-row { grid-template-columns: 64px minmax(0, 1fr); }
   .layer-inline-fields {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
@@ -1247,8 +1177,8 @@ input[type="number"], input[type="text"], select {
   .cell-settings-subtitle { padding-bottom: 4px; font-size: 8px; }
 }
 @media (max-width: 360px) {
-  .source-row { grid-template-columns: 45px minmax(0, max-content) auto minmax(0, 1fr); padding-block: 4px; }
-  .source-row-actions { grid-column: 2 / -1; grid-row: 2; justify-content: flex-end; }
+  .source-row { grid-template-columns: 45px minmax(0, 1fr); padding-block: 4px; }
+  .source-row-actions { grid-column: 2; grid-row: 2; justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
