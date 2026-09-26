@@ -71,9 +71,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   min-width: 0;
   height: 24px;
   align-items: center;
-  border-bottom: 1px solid var(--line);
+  box-shadow: 0 1px var(--line);
 }
-.workspace-section > .section-action-row:last-child { border-bottom: 0; }
+.workspace-section > .section-action-row:last-child { box-shadow: none; }
 .section-toggle {
   position: relative;
   display: flex;
@@ -123,7 +123,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   display: grid;
   min-width: 0;
   min-height: 32px;
-  grid-template-columns: 52px auto minmax(0, 1fr) auto;
+  grid-template-columns: 52px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   padding-inline: 12px 6px;
@@ -1159,7 +1159,7 @@ input[type="number"], input[type="text"], select {
 @media (max-width: 480px) {
   .wide-control-label { display: none; }
   .compact-control-label { display: inline; }
-  .source-row { grid-template-columns: 45px auto minmax(0, 1fr) auto; gap: 3px; padding-inline: 6px; }
+  .source-row { grid-template-columns: 45px minmax(0, 1fr) auto auto; gap: 3px; padding-inline: 6px; }
   .source-duration { min-width: 38px; }
   .source-row-actions { gap: 2px; }
   .source-picker-button { padding-inline: 3px; font-size: 8px; }
@@ -1214,9 +1214,7 @@ input[type="number"], input[type="text"], select {
 }
 @media (max-width: 360px) {
   .source-row { grid-template-columns: 45px minmax(0, 1fr) auto; padding-block: 4px; }
-  .source-picker-button { justify-self: start; }
-  .source-filename, .source-empty-name { grid-column: 1 / 3; }
-  .source-row-actions { grid-column: 3; grid-row: 2; justify-content: flex-end; }
+  .source-row-actions { grid-column: 2 / -1; grid-row: 2; justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }

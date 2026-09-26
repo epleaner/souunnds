@@ -2497,10 +2497,6 @@ export function App() {
             {sources.map((item, index) => (
               <div className="source-row" key={item.id}>
                 <span className="source-number mono">{`source ${index + 1}`}</span>
-                <button className="source-picker-button label-caps" type="button" onClick={() => chooseAudio(item.id)} aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
-                  <span className="wide-control-label">Choose audio</span>
-                  <span className="compact-control-label">Audio</span>
-                </button>
                 {item.name || item.audio ? (
                   <input
                     className="source-filename"
@@ -2512,6 +2508,10 @@ export function App() {
                     ))}
                   />
                 ) : <span className="source-empty-name" aria-hidden="true" />}
+                <button className="source-picker-button label-caps" type="button" onClick={() => chooseAudio(item.id)} aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
+                  <span className="wide-control-label">Choose audio</span>
+                  <span className="compact-control-label">Audio</span>
+                </button>
                 <div className="source-row-actions">
                   <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                   <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
