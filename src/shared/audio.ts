@@ -1,3 +1,5 @@
+import { nextPastelLayerColor } from "./layer-colors";
+
 export interface PcmAudio {
   sampleRate: number;
   channels: number;
@@ -15,8 +17,8 @@ export interface PlaybackAdsr {
 export const DEFAULT_PLAYBACK_ADSR: PlaybackAdsr = {
   attackSeconds: 1,
   decaySeconds: 0.8,
-  sustainLevel: 0.7,
-  releaseSeconds: 2,
+  sustainLevel: 0.72,
+  releaseSeconds: 0.4,
 };
 
 function playbackAdsrGain(
@@ -73,27 +75,30 @@ export interface Segment {
 export interface Layer {
   id: string;
   name: string;
+  color: string;
   segment: Segment;
   params: StretchParams;
   offsetSeconds: number;
   gain: number;
   muted: boolean;
+  triggerMode: "gate" | "one-shot";
 }
 
 export interface SequenceStep {
+  id: string;
   targetId: string;
   targetType: "layer" | "sequencer";
-  repeats: number;
-  length: number;
+  startSeconds: number;
+  durationSeconds: number;
+  repeatFill: boolean;
+  muted: boolean;
 }
 
 export interface Sequencer {
   id: string;
   name: string;
-  baseLengthSeconds?: number;
-  gapLengthSeconds?: number;
-  loopLayers?: boolean;
-  loopSequence?: boolean;
+  muted: boolean;
+  durationSeconds: number;
   steps: SequenceStep[];
 }
 
@@ -365,53 +370,52 @@ export async function renderArrangementAsync(
   return mixArrangementLayers(audio, rendered);
 }
 
-function layerDuration(layer: Layer, sourceSampleRate: number, sourceFrames: number): number {
-  const segmentFrames = Math.max(1, Math.ceil((layer.segment.end - layer.segment.start) * sourceSampleRate));
-  return (segmentFrames * positive(layer.params.stretch, 1)) / sourceSampleRate;
-}
-
 export function scheduleSequencer(
   arrangement: Arrangement,
   sequencerId: string,
-  layerDurations: Record<string, number>,
 ): ScheduledLayer[] {
   const sequencers = new Map(arrangement.sequencers.map((sequencer) => [sequencer.id, sequencer]));
-  const layers = new Map(arrangement.layers.map((layer) => [layer.id, layer]));
+  const layers = new Set(arrangement.layers.map((layer) => layer.id));
   const scheduled: ScheduledLayer[] = [];
   const active = new Set<string>();
 
-  const schedule = (id: string, start: number): number => {
+  const schedule = (id: string, origin: number, durationLimit?: number): number => {
     if (active.has(id)) throw new Error(`Sequencer cycle detected at ${id}.`);
     const sequencer = sequencers.get(id);
     if (!sequencer) return 0;
     active.add(id);
-    let cursor = start;
-    const gapLength = positive(sequencer.gapLengthSeconds ?? 0, 0);
-    for (let stepIndex = 0; stepIndex < sequencer.steps.length; stepIndex += 1) {
-      const step = sequencer.steps[stepIndex];
-      const repeats = Math.max(1, Math.floor(step.repeats));
-      for (let repeat = 0; repeat < repeats; repeat += 1) {
-        const naturalDuration = step.targetType === "layer"
-          ? layerDurations[step.targetId] ?? (layers.get(step.targetId)?.params.stretch ?? 1)
-          : schedule(step.targetId, cursor);
-        const baseDuration = step.targetType === "layer"
-          ? positive(sequencer.baseLengthSeconds ?? 0, naturalDuration)
-          : naturalDuration;
-        const duration = baseDuration * positive(step.length, 1);
-        if (step.targetType === "layer" && layers.has(step.targetId)) {
+    const timelineDuration = Math.min(
+      positive(sequencer.durationSeconds, 0.25),
+      durationLimit === undefined ? Number.POSITIVE_INFINITY : Math.max(0, durationLimit),
+    );
+    const steps = [...sequencer.steps].sort((left, right) => left.startSeconds - right.startSeconds);
+    for (const step of steps) {
+      if (step.muted) continue;
+      const relativeStart = Math.max(0, step.startSeconds);
+      if (relativeStart >= timelineDuration) continue;
+      const duration = Math.min(positive(step.durationSeconds, 0.25), timelineDuration - relativeStart);
+      const start = origin + relativeStart;
+      if (step.targetType === "layer") {
+        if (layers.has(step.targetId)) {
           scheduled.push({
             layerId: step.targetId,
-            startSeconds: cursor,
+            startSeconds: start,
             durationSeconds: duration,
-            loop: sequencer.loopLayers !== false,
+            loop: step.repeatFill,
           });
         }
-        const isLast = stepIndex === sequencer.steps.length - 1 && repeat === repeats - 1;
-        cursor += duration + (isLast ? 0 : gapLength);
+        continue;
+      }
+
+      const childDuration = schedule(step.targetId, start, duration);
+      if (step.repeatFill && childDuration > 0) {
+        for (let offset = childDuration; offset < duration; offset += childDuration) {
+          schedule(step.targetId, start + offset, Math.min(childDuration, duration - offset));
+        }
       }
     }
     active.delete(id);
-    return Math.max(0, cursor - start);
+    return timelineDuration;
   };
 
   schedule(sequencerId, 0);
@@ -423,6 +427,7 @@ function mixScheduledLayers(
   arrangement: Arrangement,
   schedule: ScheduledLayer[],
   rendered: Map<string, PcmAudio>,
+  durationSeconds: number,
   adsr?: PlaybackAdsr,
 ): PcmAudio {
   const layerMap = new Map(arrangement.layers.map((layer) => [layer.id, layer]));
@@ -432,12 +437,7 @@ function mixScheduledLayers(
     sustainLevel: Math.min(1, Math.max(0, adsr.sustainLevel)),
     releaseFrames: Math.max(0, Math.round(adsr.releaseSeconds * audio.sampleRate)),
   } : null;
-  const totalFrames = schedule.reduce((longest, item) => {
-    const clip = rendered.get(item.layerId);
-    return clip
-      ? Math.max(longest, Math.floor(item.startSeconds * audio.sampleRate) + Math.max(1, Math.round(item.durationSeconds * audio.sampleRate)))
-      : longest;
-  }, 1);
+  const totalFrames = Math.max(1, Math.round(positive(durationSeconds, 0.25) * audio.sampleRate));
   const output = new Float32Array(totalFrames * audio.channels);
   for (const item of schedule) {
     const clip = rendered.get(item.layerId);
@@ -471,32 +471,10 @@ function mixScheduledLayers(
 }
 
 function sequenceSchedule(
-  audio: PcmAudio,
   arrangement: Arrangement,
   sequencerId: string,
 ): ScheduledLayer[] {
-  const layerDurations = Object.fromEntries(
-    arrangement.layers.map((layer) => [layer.id, layerDuration(layer, audio.sampleRate, frameCount(audio))]),
-  );
-  return scheduleSequencer(arrangement, sequencerId, layerDurations);
-}
-export function sequenceCellDurations(
-  audio: PcmAudio,
-  arrangement: Arrangement,
-  sequencerId: string,
-): number[] {
-  const sequence = arrangement.sequencers.find((item) => item.id === sequencerId);
-  const layerDurations = new Map(
-    arrangement.layers.map((layer) => [layer.id, layerDuration(layer, audio.sampleRate, frameCount(audio))]),
-  );
-  const gapLength = positive(sequence?.gapLengthSeconds ?? 0, 0);
-  return sequence?.steps.map((step, index) => {
-    const naturalDuration = layerDurations.get(step.targetId) ?? 0;
-    const baseDuration = positive(sequence.baseLengthSeconds ?? 0, naturalDuration);
-    const repeats = Math.max(1, Math.floor(step.repeats));
-    const gaps = repeats - 1 + (index < sequence.steps.length - 1 ? 1 : 0);
-    return baseDuration * positive(step.length, 1) * repeats + gapLength * gaps;
-  }) ?? [];
+  return scheduleSequencer(arrangement, sequencerId);
 }
 
 export function renderSequencer(
@@ -506,11 +484,12 @@ export function renderSequencer(
   stretch: StretchFunction = stretchPcm,
   adsr?: PlaybackAdsr,
 ): PcmAudio {
-  const schedule = sequenceSchedule(audio, arrangement, sequencerId);
+  const schedule = sequenceSchedule(arrangement, sequencerId);
+  const sequenceDuration = arrangement.sequencers.find((sequence) => sequence.id === sequencerId)?.durationSeconds ?? 0.25;
   const rendered = new Map(
     arrangement.layers.map((layer) => [layer.id, stretch(audio, layer.segment, layer.params)]),
   );
-  return mixScheduledLayers(audio, arrangement, schedule, rendered, adsr);
+  return mixScheduledLayers(audio, arrangement, schedule, rendered, sequenceDuration, adsr);
 }
 
 export async function renderSequencerAsync(
@@ -521,14 +500,15 @@ export async function renderSequencerAsync(
   adsr?: PlaybackAdsr,
   renderedLayers: Map<string, PcmAudio> = new Map(),
 ): Promise<PcmAudio> {
-  const schedule = sequenceSchedule(audio, arrangement, sequencerId);
+  const schedule = sequenceSchedule(arrangement, sequencerId);
+  const sequenceDuration = arrangement.sequencers.find((sequence) => sequence.id === sequencerId)?.durationSeconds ?? 0.25;
   const requiredLayerIds = new Set(schedule.map((item) => item.layerId));
   for (const layer of arrangement.layers) {
     if (requiredLayerIds.has(layer.id) && !renderedLayers.has(layer.id)) {
       renderedLayers.set(layer.id, await stretch(audio, layer.segment, layer.params));
     }
   }
-  return mixScheduledLayers(audio, arrangement, schedule, renderedLayers, adsr);
+  return mixScheduledLayers(audio, arrangement, schedule, renderedLayers, sequenceDuration, adsr);
 }
 
 export function sourceSegmentRms(audio: PcmAudio, segment: Segment): number {
@@ -594,6 +574,8 @@ export function generateArrangement(
   audio?: PcmAudio,
 ): Arrangement {
   const random = seededRandom(options.seed);
+  const colorRandom = seededRandom(options.seed + 0x9e3779b9);
+  const layerColors: string[] = [];
   const count = Math.max(1, Math.floor(options.count));
   const sharedStretch = 2 + random() * 14;
   const layers: Layer[] = [];
@@ -603,9 +585,12 @@ export function generateArrangement(
       ? audibleStart(audio, length, random)
       : durationSeconds <= length ? 0 : random() * (durationSeconds - length);
     const stretch = options.linked ? sharedStretch : 2 + random() * 18;
+    const color = nextPastelLayerColor(layerColors, colorRandom);
+    layerColors.push(color);
     layers.push({
       id: `generated-${index + 1}`,
-      name: `Generated layer ${index + 1}`,
+      name: `Layer ${index + 1}`,
+      color,
       segment: { start, end: Math.min(durationSeconds, start + length) },
       params: {
         ...DEFAULT_PARAMS,
@@ -617,6 +602,7 @@ export function generateArrangement(
       offsetSeconds: random() * 3,
       gain: 0.65 / Math.sqrt(count),
       muted: false,
+      triggerMode: "one-shot",
     });
   }
   return { layers, sequencers: [] };
