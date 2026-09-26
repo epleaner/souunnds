@@ -1,6 +1,6 @@
 # Studio UI polish
 
-State: original eight-item polish complete; Bead `tunestretch-6q2` closed and published at `a26f626` on `origin/ep/sources-section`. Follow-on slider consistency is tracked in Bead `tunestretch-txl`; themed dropdowns are tracked in closed Bead `tunestretch-2nl`.
+State: complete. Original eight-item polish closed in Bead `tunestretch-6q2` at `a26f626`; slider consistency closed in Bead `tunestretch-txl` at `70fa9a7`; themed dropdowns closed in Bead `tunestretch-2nl`. All were published on `origin/ep/sources-section`.
 
 ## Goal and independent acceptance items
 1. Source rows: move Choose audio to the right, directly left of each duration timestamp, including compact layout and empty/long filenames.
@@ -31,4 +31,8 @@ Decision and implementation: move Choose audio into the row action group immedia
 ## Slider consistency follow-on
 Bead `tunestretch-txl` unifies the shared `RangeField` presentation: label → slider → value in DOM and on screen; one 4 CSS px column gap and zero default range-input margin make every visible slider/value gap 6 rendered px at the 1.5× UI scale. The existing shared track/thumb styles remain identical for layer, ADSR, and effects sliders. ADSR's label track preserves its slider x129/x126 alignment to effect labels at 1289px/320px.
 
-At widths up to 1200px, five layer controls reflow to two columns instead of squeezing the Stretch slider to zero width; below 480px they use one column. Values remain visible at 800px, 1200px, 320px, and 1289px, with no horizontal overflow; the minimum observed Stretch track at 800px measured 65px. Browser inspection found all 49 rendered controls ordered label/slider/value with the same 6px slider/value gap at both 1289px and 320px. Keyboard ArrowRight updated Layer 1 gain from 0.8/-1.94dB to 0.85/-1.41dB and Reverb decay from 2.4s to 2.5s; ArrowLeft restored both. Pointer adjustment at 800px changed Stretch from 8 to 34.5 and Reverb decay from 2.4s to 7.0s; both were restored. `npm run build`, `npm test` (18/18), and `git diff --check` passed; browser errors empty. Next action: publish and close `tunestretch-txl`.
+At widths up to 1200px, five layer controls reflow to two columns instead of squeezing the Stretch slider to zero width; below 480px they use one column. Values remain visible at 800px, 1200px, 320px, and 1289px, with no horizontal overflow; the minimum observed Stretch track at 800px measured 65px.
+
+Browser inspection found all 49 rendered controls ordered label/slider/value with the same 6px slider/value gap at both 1289px and 320px. The 480/481px, 720/721px, and 1200/1201px transitions kept outputs visible, tracks nonzero, and page width bounded. Keyboard ArrowRight updated Layer 1 gain from 0.8/-1.94dB to 0.85/-1.41dB and Reverb decay from 2.4s to 2.5s; ArrowLeft restored both. Pointer adjustment at 800px changed Stretch from 8 to 34.5 and Reverb decay from 2.4s to 7.0s; both were restored.
+
+`npm run build`, `npm test` (18/18), and staged `git diff --check` passed; browser errors empty. Published at `70fa9a7`; Bead `tunestretch-txl` closed with no open follow-up.
