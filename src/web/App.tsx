@@ -2047,6 +2047,7 @@ export function App() {
     const first = sources.find((item) => item.audio);
     if (!first) return setStatus("Import a file before adding layers.");
     cancelArrangementPlayback();
+    initialArrangementCreatedRef.current = true;
     setLayers((current) => [...current, createLayer(first.duration, current.length, current.map((layer) => layer.color), first.id)]);
   }
 
@@ -2093,6 +2094,7 @@ export function App() {
       seed: generatedSeed,
       linked: generatedLinked,
     }, first.audio);
+    initialArrangementCreatedRef.current = true;
     generated.layers.forEach((layer) => { layer.sourceId = first.id; });
     setLayers(generated.layers);
     const generatedSequences = generated.layers.map((layer, index) => ({
@@ -2494,7 +2496,7 @@ export function App() {
           <div id="sources-content" className="section-content source-list">
             {sources.map((item, index) => (
               <div className="source-row" key={item.id}>
-                <span className="source-number mono" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                <span className="source-number mono">{`source ${index + 1}`}</span>
                 {item.name || item.audio ? (
                   <input
                     className="source-filename"
@@ -2505,13 +2507,13 @@ export function App() {
                       candidate.id === item.id ? { ...candidate, name: event.target.value } : candidate
                     ))}
                   />
-                ) : <span className="source-empty-name">Source {index + 1}</span>}
-                <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
+                ) : <span className="source-empty-name" aria-hidden="true" />}
                 <div className="source-row-actions">
                   <button className="source-picker-button label-caps" type="button" onClick={() => chooseAudio(item.id)} aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
                     <span className="wide-control-label">Choose audio</span>
                     <span className="compact-control-label">Audio</span>
                   </button>
+                  <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                   <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
                   <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
                   <IconButton className="destructive-button" onClick={() => removeSource(item.id)} ariaLabel={`Remove source ${index + 1}`}><CloseIcon /></IconButton>
