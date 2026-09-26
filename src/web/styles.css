@@ -123,16 +123,18 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   display: grid;
   min-width: 0;
   min-height: 32px;
-  grid-template-columns: 52px minmax(0, 1fr) auto;
+  grid-template-columns: 52px auto 52px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding-inline: 12px 6px;
   border-bottom: 1px solid var(--line);
 }
+.source-row:last-of-type { border-bottom: 0; }
 .source-number, .source-duration, .source-empty-name {
   color: var(--muted);
   font-size: 9px;
 }
+.source-number { font: 500 8px/1.5 var(--mono); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
 .source-filename {
   width: 100%;
   min-width: 0;
@@ -219,8 +221,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .sources-section .section-action-group > button:hover:not(:disabled) {
   border-left: 0;
 }
-.sources-section .source-row button,
-.sources-section .source-row button:hover:not(:disabled) {
+.sources-section .source-row .icon-button,
+.sources-section .source-row .icon-button:hover:not(:disabled) {
   border: 0;
 }
 
@@ -1156,7 +1158,7 @@ input[type="number"], input[type="text"], select {
 @media (max-width: 480px) {
   .wide-control-label { display: none; }
   .compact-control-label { display: inline; }
-  .source-row { grid-template-columns: 45px minmax(0, 1fr) auto; gap: 3px; padding-inline: 6px; }
+  .source-row { grid-template-columns: 45px auto 38px minmax(0, 1fr) auto; gap: 3px; padding-inline: 6px; }
   .source-duration { min-width: 38px; }
   .source-row-actions { gap: 2px; }
   .source-picker-button { padding-inline: 3px; font-size: 8px; }
@@ -1210,8 +1212,10 @@ input[type="number"], input[type="text"], select {
   .cell-settings-subtitle { padding-bottom: 4px; font-size: 8px; }
 }
 @media (max-width: 360px) {
-  .source-row { grid-template-columns: 45px minmax(0, 1fr); padding-block: 4px; }
-  .source-row-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .source-row { grid-template-columns: 45px minmax(0, 1fr) 38px auto; padding-block: 4px; }
+  .source-picker-button { justify-self: start; }
+  .source-filename, .source-empty-name { grid-column: 1 / 4; }
+  .source-row-actions { grid-column: 4; grid-row: 2; justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
