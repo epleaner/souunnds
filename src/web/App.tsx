@@ -2502,6 +2502,7 @@ export function App() {
                     className="source-filename"
                     aria-label={`Source ${index + 1} name`}
                     value={item.name}
+                    size={Math.max(1, item.name.length)}
                     title={item.name}
                     onChange={(event) => setSources((current) => current.map((candidate) =>
                       candidate.id === item.id ? { ...candidate, name: event.target.value } : candidate
