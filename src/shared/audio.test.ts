@@ -8,6 +8,8 @@ import {
   generateArrangement,
   findAudibleStart,
   renderArrangement,
+  renderArrangementAsync,
+  renderSequencer,
   renderSequencerAsync,
   scheduleSequencer,
   sourceSegmentRms,
@@ -94,6 +96,57 @@ describe("audio core", () => {
     expect(mixed.samples.length).toBe(16);
     expect(mixed.samples[1]).not.toBe(0);
     expect(mixed.samples[9]).not.toBe(0);
+  });
+
+  it("renders each layer and sequence clip from its assigned source across channel layouts", async () => {
+    const fallback: PcmAudio = { sampleRate: 4, channels: 2, samples: new Float32Array(8).fill(0.05) };
+    const mono: PcmAudio = { sampleRate: 4, channels: 1, samples: new Float32Array(4).fill(0.1) };
+    const stereo: PcmAudio = { sampleRate: 4, channels: 2, samples: new Float32Array([0.2, 0.4, 0.2, 0.4, 0.2, 0.4, 0.2, 0.4]) };
+    const sources = new Map([["mono", mono], ["stereo", stereo]]);
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "a", sourceId: "mono", name: "A", color: "#b9dfe3", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false, triggerMode: "one-shot" },
+        { id: "b", sourceId: "stereo", name: "B", color: "#e6c5df", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 1, gain: 1, muted: false, triggerMode: "one-shot" },
+      ],
+      sequencers: [{ id: "main", name: "Main", muted: false, durationSeconds: 2, steps: [
+        sequenceClip("first", 0, 1, "a", false),
+        sequenceClip("second", 1, 1, "b", false),
+      ] }],
+    };
+    const expectSamples = (actual: PcmAudio, expected: number[]) => {
+      expect(actual.samples.length).toBe(expected.length);
+      expected.forEach((sample, index) => expect(actual.samples[index]).toBeCloseTo(sample));
+    };
+    const expected = [
+      ...Array(4).fill([0.1, 0.1]).flat(),
+      ...Array(4).fill([0.2, 0.4]).flat(),
+    ];
+    expectSamples(renderArrangement(fallback, arrangement, (input) => input, sources), expected);
+    expectSamples(await renderArrangementAsync(fallback, arrangement, async (input) => input, sources), expected);
+    expectSamples(renderSequencer(fallback, arrangement, "main", (input) => input, undefined, sources), expected);
+    expectSamples(await renderSequencerAsync(fallback, arrangement, "main", async (input) => input, undefined, new Map(), sources), expected);
+
+    const monoOutput: PcmAudio = { sampleRate: 4, channels: 1, samples: new Float32Array(4) };
+    expectSamples(renderArrangement(monoOutput, { ...arrangement, layers: [arrangement.layers[1]] }, (input) => input, sources),
+      [0, 0, 0, 0, 0.3, 0.3, 0.3, 0.3]);
+    expectSamples(renderSequencer(monoOutput, arrangement, "main", (input) => input, undefined, sources),
+      [0.1, 0.1, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3]);
+
+    expect([...renderArrangement(fallback, { ...arrangement, layers: [arrangement.layers[0]] }, (input) => input).samples])
+      .toEqual([...fallback.samples]);
+  });
+
+  it("rejects missing assigned sources rather than rendering fallback audio", async () => {
+    const audio = toneAudio();
+    const arrangement: Arrangement = {
+      layers: [{ id: "a", sourceId: "missing", name: "A", color: "#b9dfe3", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false, triggerMode: "one-shot" }],
+      sequencers: [{ id: "main", name: "Main", muted: false, durationSeconds: 1, steps: [sequenceClip("first", 0, 1, "a")] }],
+    };
+    const sources = new Map<string, PcmAudio>();
+    expect(() => renderArrangement(audio, arrangement, (input) => input, sources)).toThrow(/missing.*a.*missing/i);
+    await expect(renderArrangementAsync(audio, arrangement, async (input) => input, sources)).rejects.toThrow(/missing.*a.*missing/i);
+    expect(() => renderSequencer(audio, arrangement, "main", (input) => input, undefined, sources)).toThrow(/missing.*a.*missing/i);
+    await expect(renderSequencerAsync(audio, arrangement, "main", async (input) => input, undefined, new Map(), sources)).rejects.toThrow(/missing.*a.*missing/i);
   });
 
   it("generates the same arrangement for the same seed", () => {

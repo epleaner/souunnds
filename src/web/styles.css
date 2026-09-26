@@ -66,7 +66,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   min-width: 0;
   border-bottom: 1px solid var(--line);
 }
-.source-section { border-bottom: 1px solid var(--line); }
 .section-action-row {
   display: flex;
   min-width: 0;
@@ -114,79 +113,51 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border: 0;
 }
 
-.source-header-main {
-  display: flex;
-  min-width: 0;
-  height: 100%;
-  flex: 1;
-  align-items: center;
-  overflow: hidden;
+.source-list {
+  display: grid;
+  max-height: 160px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.source-title {
-  flex: 0 0 auto;
-  padding: 0 10px 0 12px;
-  color: var(--text);
+.source-row {
+  display: grid;
+  min-width: 0;
+  min-height: 32px;
+  grid-template-columns: 24px minmax(0, 1fr) 52px auto;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 12px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.source-number, .source-duration, .source-empty-name {
+  color: var(--muted);
+  font-size: 9px;
 }
 .source-filename {
+  width: 100%;
   min-width: 0;
-  width: min(28vw, 220px);
-  flex: 0 1 auto;
-  padding: 0 10px 0 0;
-  overflow: hidden;
+  padding: 2px 0;
   border: 0;
   color: var(--text);
   background: transparent;
-  outline: 0;
   text-overflow: ellipsis;
 }
-.source-header-main > button,
-.source-header-main > button:hover:not(:disabled) {
-  height: 100%;
-  min-height: 100%;
-  flex: 0 0 auto;
-  padding: 0 10px;
-  border: 0;
-  border-left: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  white-space: nowrap;
+.source-empty-name { min-width: 0; }
+.source-duration { text-align: right; }
+.source-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 .source-picker-button {
+  min-height: 20px;
+  padding-inline: 6px;
+  border: 1px solid var(--line);
   color: var(--muted);
+  background: transparent;
 }
-.source-picker-button:hover:not(:disabled) {
-  color: var(--text);
-}
-.source-restore-link {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-  font: 9px/1.3 var(--mono);
-  text-transform: lowercase;
-}
-.source-header-main > .source-restore-link { flex: 1 1 auto; }
-.source-restore-link span {
-  overflow: hidden;
-  color: inherit;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.source-restore-link:hover:not(:disabled) { color: var(--muted); background: transparent; }
+.source-picker-button:hover:not(:disabled) { color: var(--text); background: var(--surface-active); }
 .source-picker-input { display: none; }
-.source-clock {
-  display: flex;
-  min-width: 52px;
-  height: 100%;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 10px;
-  color: var(--muted);
-  font: 12px/18px "IBM Plex Mono", var(--mono);
-  text-align: right;
-}
 .make-button, .popover-trigger {
   height: 22px;
   min-height: 22px;
@@ -403,6 +374,30 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   width: 20px;
   height: 20px;
   min-height: 20px;
+}
+.layer-trigger-mode[aria-pressed="true"],
+.layer-trigger-mode[aria-pressed="false"],
+.layer-trigger-mode[aria-pressed]:hover:not(:disabled) {
+  color: var(--muted);
+}
+.layer-src-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font: 9px/1 var(--mono);
+}
+.layer-src-label select {
+  width: 96px;
+  min-width: 0;
+  height: 20px;
+  padding: 1px 2px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--text);
+  background: var(--surface);
+  font: 9px/1 var(--mono);
 }
 .layer-inline-fields {
   display: grid;
@@ -1006,6 +1001,15 @@ input[type="number"], input[type="text"], select {
   font: 10px/1 var(--mono);
   pointer-events: none;
 }
+.footer-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.footer-stop-button {
+  margin-left: auto;
+  pointer-events: auto;
+}
 .processing-footer-label { color: var(--muted); letter-spacing: .08em; }
 .footer-divider { width: 1px; height: 12px; background: var(--line-strong); }
 .processing-footer-percent { color: var(--muted); }
@@ -1014,11 +1018,6 @@ input[type="number"], input[type="text"], select {
   .generator-popover { grid-template-columns: 1fr; }
 }
 @media (max-width: 960px) {
-  .source-title { padding-inline: 8px 6px; }
-  .source-filename { width: min(20vw, 80px); padding-right: 6px; }
-  .source-header-main > button,
-  .source-header-main > button:hover:not(:disabled) { padding-inline: 6px; }
-  .source-restore-link { gap: 2px; font-size: 8px; }
   .section-action-row { align-items: center; }
   .section-action-group { flex-wrap: nowrap; justify-content: flex-end; padding: 0; }
   .section-action-group .section-action { display: none; }
@@ -1048,8 +1047,6 @@ input[type="number"], input[type="text"], select {
   .envelope-graph { height: 220px; }
 }
 @media (max-width: 720px) {
-  .source-header-main > .source-restore-link { flex: 0 0 auto; }
-  .source-restore-link span { display: none; }
   .section-action-group > .make-button,
   .section-action-group > .popover-trigger {
     padding-inline: 2px;
@@ -1078,11 +1075,20 @@ input[type="number"], input[type="text"], select {
   .layer-row { min-width: 0; }
   .layer-row-main {
     height: auto;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
     padding-block: 6px;
   }
-  .layer-row-actions,
+  .layer-row-actions {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 24px;
+    justify-self: end;
+  }
+  .layer-inline-fields {
+    grid-column: 1;
+    grid-row: 2;
+  }
   .sequence-row-actions {
     grid-column: 2;
     grid-row: 1;
@@ -1090,7 +1096,6 @@ input[type="number"], input[type="text"], select {
     align-self: start;
     justify-self: end;
   }
-  .layer-inline-fields,
   .sequence-row-content {
     grid-column: 1;
     grid-row: 1;
@@ -1125,10 +1130,6 @@ input[type="number"], input[type="text"], select {
     flex-direction: column;
     align-items: flex-end;
   }
-  .row-actions-menu-panel .layer-trigger-controls {
-    flex-direction: column;
-    align-items: flex-end;
-  }
   .row-actions-menu.is-open > .row-actions-menu-panel {
     display: flex;
   }
@@ -1145,10 +1146,13 @@ input[type="number"], input[type="text"], select {
   .effect-name { grid-column: 1 / -1; }
 }
 @media (max-width: 480px) {
-  .wide-control-label,
-  .source-filename,
-  .source-restore-link { display: none; }
+  .wide-control-label { display: none; }
   .compact-control-label { display: inline; }
+  .source-row { grid-template-columns: 18px minmax(0, 1fr) 38px auto; gap: 3px; padding-inline: 6px; }
+  .source-row-actions { gap: 2px; }
+  .source-picker-button { padding-inline: 3px; font-size: 8px; }
+  .source-row-actions .icon-button { width: 18px; }
+  .layer-src-label select { width: 72px; }
   .section-action-group > .make-button,
   .section-action-group > .popover-trigger { padding-inline: 4px; }
   .effect-row,

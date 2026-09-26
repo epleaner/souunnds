@@ -2,6 +2,10 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Git delivery
+
+For verified task-owned repository changes, commit and push the task branch by default, including worktree branches. This project rule overrides the conservative default in the managed Beads integration below. Explicit instructions not to commit or push take precedence. Stage only task-owned files; never force-push, automatically rebase, or push directly to a protected branch.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 

@@ -46,7 +46,7 @@ type SequenceResizeState = {
   initialSteps: SequenceStep[];
 };
 type PlaybackTarget =
-  | { kind: "source" }
+  | { kind: "source"; id: string }
   | { kind: "layer"; id: string }
   | { kind: "layers" }
   | { kind: "sequence"; id: string }
@@ -136,12 +136,14 @@ type PersistedSequencer = {
   gapLengthSeconds?: unknown;
   steps?: unknown;
 };
+type AudioSource = { id: string; name: string; duration: number; audio: PcmAudio | null };
+type StoredSource = Pick<AudioSource, "id" | "name" | "duration">;
 type PersistedStudioState = {
+  sources: StoredSource[];
   layers: Layer[];
   sequencers: Sequencer[];
   adsr: PlaybackAdsr;
   effects: PlaybackEffects;
-  duration: number;
   activeSequencerId: string;
   selectedCellIndex: number;
 };
@@ -182,6 +184,7 @@ function isPersistedLayer(value: unknown): value is PersistedLayer {
     && isFiniteNumber(layer.gain)
     && typeof layer.muted === "boolean"
     && (layer.color === undefined || typeof layer.color === "string")
+    && (layer.sourceId === undefined || typeof layer.sourceId === "string")
     && (layer.triggerMode === undefined || layer.triggerMode === "gate" || layer.triggerMode === "one-shot");
 }
 
@@ -283,8 +286,13 @@ function readPersistedStudioState(): PersistedStudioState | null {
   try {
     const raw = window.localStorage.getItem(STUDIO_STATE_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<PersistedStudioState>;
+    const parsed = JSON.parse(raw) as Partial<PersistedStudioState> & { duration?: number };
     const layerColors: string[] = [];
+    const storedSources = Array.isArray(parsed.sources)
+      ? parsed.sources.filter((item): item is StoredSource => !!item && typeof item.id === "string" && typeof item.name === "string" && isFiniteNumber(item.duration) && item.duration >= 0)
+      : [];
+    const legacyName = readStoredSourceFileName();
+    const sources = storedSources.length ? storedSources : [{ id: "source", name: legacyName, duration: isFiniteNumber(parsed.duration) ? parsed.duration : 0 }];
     const layers = Array.isArray(parsed.layers)
       ? parsed.layers.filter(isPersistedLayer).map((layer, index) => {
           const color = isPastelLayerColor(layer.color) && !layerColors.includes(layer.color.toLowerCase())
@@ -306,11 +314,11 @@ function readPersistedStudioState(): PersistedStudioState | null {
       : [];
     const selectedCellIndex = parsed.selectedCellIndex;
     return {
+      sources,
       layers,
       sequencers,
       adsr: isPersistedAdsr(parsed.adsr) ? parsed.adsr : { ...DEFAULT_PLAYBACK_ADSR },
       effects: readPersistedEffects(parsed.effects),
-      duration: isFiniteNumber(parsed.duration) && parsed.duration >= 0 ? parsed.duration : 0,
       activeSequencerId: typeof parsed.activeSequencerId === "string" ? parsed.activeSequencerId : MAIN_SEQUENCE_ID,
       selectedCellIndex: typeof selectedCellIndex === "number" && Number.isInteger(selectedCellIndex) && selectedCellIndex >= 0 ? selectedCellIndex : 0,
     };
@@ -346,7 +354,7 @@ function openStoredAudioDb(): Promise<IDBDatabase> {
   return promise;
 }
 
-async function storeAudioFile(file: File): Promise<boolean> {
+async function storeAudioFile(id: string, file: File): Promise<boolean> {
   let database: IDBDatabase | null = null;
   try {
     database = await openStoredAudioDb();
@@ -357,7 +365,7 @@ async function storeAudioFile(file: File): Promise<boolean> {
       name: file.name,
       type: file.type,
       lastModified: file.lastModified,
-    } satisfies StoredAudioRecord, STORED_AUDIO_KEY);
+    } satisfies StoredAudioRecord, id);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error("Could not store the audio file."));
     await promise;
@@ -369,13 +377,13 @@ async function storeAudioFile(file: File): Promise<boolean> {
   }
 }
 
-async function readStoredAudioFile(): Promise<File | null> {
+async function readStoredAudioFile(id: string): Promise<File | null> {
   let database: IDBDatabase | null = null;
   try {
     database = await openStoredAudioDb();
     const { promise, resolve } = Promise.withResolvers<File | null>();
     const transaction = database.transaction(STORED_AUDIO_STORE_NAME, "readonly");
-    const request = transaction.objectStore(STORED_AUDIO_STORE_NAME).get(STORED_AUDIO_KEY);
+    const request = transaction.objectStore(STORED_AUDIO_STORE_NAME).get(id);
     request.onsuccess = () => {
       const record = request.result as StoredAudioRecord | undefined;
       resolve(record ? new File([record.blob], record.name, { type: record.type, lastModified: record.lastModified }) : null);
@@ -385,6 +393,20 @@ async function readStoredAudioFile(): Promise<File | null> {
     return await promise;
   } catch {
     return null;
+  } finally {
+    database?.close();
+  }
+}
+async function deleteStoredAudioFile(id: string): Promise<void> {
+  let database: IDBDatabase | null = null;
+  try {
+    database = await openStoredAudioDb();
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const transaction = database.transaction(STORED_AUDIO_STORE_NAME, "readwrite");
+    transaction.objectStore(STORED_AUDIO_STORE_NAME).delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not remove stored audio."));
+    await promise;
   } finally {
     database?.close();
   }
@@ -423,11 +445,12 @@ function mixPcm(audios: PcmAudio[]): PcmAudio {
   return { sampleRate: first.sampleRate, channels: first.channels, samples };
 }
 
-function createLayer(duration: number, index: number, existingColors: Iterable<string> = []): Layer {
+function createLayer(duration: number, index: number, existingColors: Iterable<string> = [], sourceId?: string): Layer {
   return {
     id: `layer-${Date.now()}-${index}`,
     name: `Layer ${index + 1}`,
     color: nextPastelLayerColor(existingColors),
+    sourceId,
     segment: { start: 0, end: Math.max(0.1, Math.min(duration, 4)) },
     params: { ...DEFAULT_PARAMS },
     offsetSeconds: 0,
@@ -739,19 +762,13 @@ function updatePlaybackEffectNodes(nodes: PlaybackEffectNodes, effects: Playback
   nodes.compressorDryGain.gain.setTargetAtTime(compressionEnabled ? 0 : 1, now, 0.01);
   nodes.compressorWetGain.gain.setTargetAtTime(compressionEnabled ? 1 : 0, now, 0.01);
 }
-function repairGeneratedLayers(audio: PcmAudio, layers: Layer[]): { layers: Layer[]; changed: boolean } {
+function repairGeneratedLayer(audio: PcmAudio, layer: Layer): Layer {
+  if (!layer.id.startsWith("generated-") || sourceSegmentRms(audio, layer.segment) > 1e-8) return layer;
   const sourceDuration = audio.samples.length / audio.channels / audio.sampleRate;
-  let changed = false;
-  const repaired = layers.map((layer) => {
-    if (!layer.id.startsWith("generated-") || sourceSegmentRms(audio, layer.segment) > 1e-8) return layer;
-    const length = Math.max(0.15, layer.segment.end - layer.segment.start);
-    const start = findAudibleStart(audio, length);
-    const end = Math.min(sourceDuration, start + length);
-    if (start === layer.segment.start || end <= start) return layer;
-    changed = true;
-    return { ...layer, segment: { start, end } };
-  });
-  return { layers: repaired, changed };
+  const length = Math.max(0.15, layer.segment.end - layer.segment.start);
+  const start = findAudibleStart(audio, length);
+  const end = Math.min(sourceDuration, start + length);
+  return start === layer.segment.start || end <= start ? layer : { ...layer, segment: { start, end } };
 }
 function hasSignal(audio: PcmAudio): boolean {
   for (const sample of audio.samples) if (Math.abs(sample) > 1e-6) return true;
@@ -1170,11 +1187,18 @@ function EnvelopeGraph({ adsr, onChange }: { adsr: PlaybackAdsr; onChange: (next
 }
 
 export function App() {
-  const [source, setSource] = useState<PcmAudio | null>(null);
-  const [loadedSourceFileName, setLoadedSourceFileName] = useState("");
-  const [fileName, setFileName] = useState("");
-  const [restoredFileName, setRestoredFileName] = useState(readStoredSourceFileName);
-  const [duration, setDuration] = useState(() => persistedStudioState?.duration ?? 0);
+  const [sources, setSources] = useState<AudioSource[]>(() =>
+    (persistedStudioState?.sources ?? [{ id: "source", name: readStoredSourceFileName(), duration: 0 }]).map((item) => ({ ...item, audio: null }))
+  );
+  const source = sources.find((item) => item.audio)?.audio ?? null;
+  const duration = sources.find((item) => item.audio)?.duration ?? sources[0]?.duration ?? 0;
+  const sourceMap = useMemo(() => new Map(sources.flatMap((item) => item.audio ? [[item.id, item.audio] as const] : [])), [sources]);
+  function sourceForLayer(layer: Layer): PcmAudio | null {
+    return layer.sourceId ? sourceMap.get(layer.sourceId) ?? null : source;
+  }
+  function durationForLayer(layer: Layer): number {
+    return layer.sourceId ? sources.find((item) => item.id === layer.sourceId)?.duration ?? 0 : duration;
+  }
   const [layers, setLayers] = useState<Layer[]>(() => persistedStudioState?.layers ?? []);
   const [sequencers, setSequencers] = useState<Sequencer[]>(() => persistedStudioState?.sequencers ?? []);
   const [activeSequencerId, setActiveSequencerId] = useState(() => {
@@ -1209,7 +1233,7 @@ export function App() {
   const [sequenceProgress, setSequenceProgress] = useState<Array<{ sequenceId: string; elapsedSeconds: number }>>([]);
   const arrangement = useMemo<Arrangement>(() => ({ layers, sequencers }), [layers, sequencers]);
   const activeSequencer = sequencers.find((sequence) => sequence.id === activeSequencerId) ?? sequencers[0];
-  const [expandedSections, setExpandedSections] = useState({ layers: true, sequence: true, adsr: true });
+  const [expandedSections, setExpandedSections] = useState({ sources: true, layers: true, sequence: true, adsr: true });
   const selectedClips = useMemo(() => sequencers.flatMap((sequence) => (
     sequence.steps.flatMap((step, index) => (
       selectedClipIds.has(sequenceClipKey(sequence.id, step.id))
@@ -1233,38 +1257,38 @@ export function App() {
   const effectNodesRef = useRef<PlaybackEffectNodes | null>(null);
   const playbackStartedAtRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedSourceIdRef = useRef("source");
   const keyboardBusRef = useRef<KeyboardPlaybackBus | null>(null);
   const keyboardVoicesRef = useRef(new Map<string, KeyboardLayerVoice>());
   const pendingKeyboardTriggersRef = useRef(new Map<string, symbol>());
   const activeTriggerCodesRef = useRef(new Map<string, { layerId: string; mode: LayerTriggerMode }>());
   const playbackRequestRef = useRef(0);
   const processingRequestRef = useRef<number | null>(null);
-  const sourceLoadRequestRef = useRef(0);
+  const sourceLoadRequestRef = useRef(new Map<string, symbol>());
+  const sourceStorePendingRef = useRef(new Map<string, Promise<boolean>>());
+  const initialArrangementCreatedRef = useRef(layers.length > 0 || sequencers.length > 0);
 
-  const renderCacheRef = useRef<{ source: PcmAudio | null; entries: Map<string, Promise<PcmAudio>> }>({
-    source: null,
-    entries: new Map(),
-  });
+  const renderCacheRef = useRef(new WeakMap<PcmAudio, Map<string, Promise<PcmAudio>>>());
 
   async function renderLayerCached(audio: PcmAudio, segment: Layer["segment"], params: Layer["params"]): Promise<PcmAudio> {
-    const cache = renderCacheRef.current;
-    if (cache.source !== audio) {
-      cache.source = audio;
-      cache.entries.clear();
+    let cache = renderCacheRef.current.get(audio);
+    if (!cache) {
+      cache = new Map();
+      renderCacheRef.current.set(audio, cache);
     }
     const key = JSON.stringify([segment.start, segment.end, params.stretch, params.windowSeconds, params.overlap, params.onset, params.seed]);
-    const cached = cache.entries.get(key);
+    const cached = cache.get(key);
     if (cached) return cached;
-    if (cache.entries.size >= 64) {
-      const oldest = cache.entries.keys().next().value;
-      if (oldest) cache.entries.delete(oldest);
+    if (cache.size >= 64) {
+      const oldest = cache.keys().next().value;
+      if (oldest) cache.delete(oldest);
     }
     const pending = stretchForPlayback(audio, segment, params);
-    cache.entries.set(key, pending);
+    cache.set(key, pending);
     try {
       return await pending;
     } catch (error) {
-      cache.entries.delete(key);
+      cache.delete(key);
       throw error;
     }
   }
@@ -1274,14 +1298,6 @@ export function App() {
   const layerNames = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.name])), [layers]);
   const layerColors = useMemo(() => new Map(layers.map((layer) => [layer.id, layer.color])), [layers]);
 
-  useEffect(() => {
-    if (!fileName) return;
-    try {
-      window.localStorage.setItem(SOURCE_FILE_NAME_STORAGE_KEY, fileName);
-    } catch {
-      // Storage can be unavailable in private or restricted browser contexts.
-    }
-  }, [fileName]);
 
   useEffect(() => {
     const validClipIds = new Set(sequencers.flatMap((sequence) => (
@@ -1295,25 +1311,32 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void readStoredAudioFile().then((file) => {
-      if (cancelled) return;
-      setRestoredFileName(file?.name ?? "");
-      try {
-        if (file) window.localStorage.setItem(SOURCE_FILE_NAME_STORAGE_KEY, file.name);
-        else window.localStorage.removeItem(SOURCE_FILE_NAME_STORAGE_KEY);
-      } catch {
-        // Storage can be unavailable in private or restricted browser contexts.
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+    for (const item of persistedStudioState?.sources ?? [{ id: "source", name: readStoredSourceFileName(), duration: 0 }]) {
+      void readStoredAudioFile(item.id).then(async (file) => {
+        if (!file || cancelled || sourceLoadRequestRef.current.has(item.id)) return;
+        const token = Symbol(item.id);
+        sourceLoadRequestRef.current.set(item.id, token);
+        try {
+          const decoded = await ensureContext().decodeAudioData(await file.arrayBuffer());
+          if (cancelled || sourceLoadRequestRef.current.get(item.id) !== token) return;
+          setSources((current) => current.map((candidate) =>
+            candidate.id === item.id ? { ...candidate, audio: pcmFromAudioBuffer(decoded), duration: decoded.duration } : candidate
+          ));
+        } catch {
+          if (!cancelled) setStatus(`Could not restore ${item.name}. Choose audio to replace it.`);
+        } finally {
+          if (sourceLoadRequestRef.current.get(item.id) === token) sourceLoadRequestRef.current.delete(item.id);
+        }
+      });
+    }
+    return () => { cancelled = true; };
   }, []);
 
 
   useEffect(() => {
     try {
       window.localStorage.setItem(STUDIO_STATE_STORAGE_KEY, JSON.stringify({
+        sources: sources.map(({ id, name, duration: length }) => ({ id, name, duration: length })),
         layers,
         sequencers,
         adsr,
@@ -1323,14 +1346,13 @@ export function App() {
           compressorMidAmount,
           compressorHighAmount,
         },
-        duration,
         activeSequencerId,
         selectedCellIndex,
       }));
     } catch {
       // Storage can be unavailable in private or restricted browser contexts.
     }
-  }, [activeSequencerId, adsr, duration, effects, layers, selectedCellIndex, sequencers]);
+  }, [activeSequencerId, adsr, effects, layers, selectedCellIndex, sequencers, sources]);
 
   useEffect(() => {
     if (!sequencePlayback) {
@@ -1423,7 +1445,7 @@ export function App() {
       if (event.repeat || event.metaKey || event.ctrlKey || event.altKey || isEditableTriggerTarget(event.target)) return;
       const triggerIndex = LAYER_TRIGGER_BINDINGS.findIndex((binding) => binding.code === event.code);
       const layer = layers[triggerIndex];
-      if (triggerIndex < 0 || !source || !layer || layer.muted || activeTriggerCodesRef.current.has(event.code)) return;
+      if (triggerIndex < 0 || !layer || !sourceForLayer(layer) || layer.muted || activeTriggerCodesRef.current.has(event.code)) return;
       const mode: LayerTriggerMode = layer.triggerMode === "gate" ? "gate" : "one-shot";
       activeTriggerCodesRef.current.set(event.code, { layerId: layer.id, mode });
       event.preventDefault();
@@ -1456,7 +1478,7 @@ export function App() {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [adsr, effects, layers, source]);
+  }, [adsr, effects, layers, sources]);
   useEffect(() => () => {
     stopAllKeyboardLayerVoices(false);
     const keyboardBus = keyboardBusRef.current;
@@ -1515,13 +1537,13 @@ export function App() {
   }
 
   async function triggerLayerFromKeyboard(layer: Layer, code: string, mode: LayerTriggerMode): Promise<void> {
-    if (!source) return;
+    if (!sourceForLayer(layer)) return;
     const token = Symbol(layer.id);
     pendingKeyboardTriggersRef.current.set(layer.id, token);
     try {
       const playbackArrangement = arrangementForPlayback();
       const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
-      const rendered = await renderLayerCached(source, playableLayer.segment, playableLayer.params);
+      const rendered = await renderLayerCached(sourceForLayer(playableLayer)!, playableLayer.segment, playableLayer.params);
       if (pendingKeyboardTriggersRef.current.get(layer.id) !== token) return;
       if (mode === "gate" && activeTriggerCodesRef.current.get(code)?.layerId !== layer.id) return;
       const keyboardBus = ensureKeyboardBus();
@@ -1709,90 +1731,106 @@ export function App() {
     return { isPlaying: active && playing, isPaused: active && paused };
   }
 
-  async function togglePlayback(): Promise<void> {
-    return toggleTargetPlayback({ kind: "source" }, playSource);
+  async function togglePlayback(id: string): Promise<void> {
+    return toggleTargetPlayback({ kind: "source", id }, () => playSource(id));
   }
 
-  function beginSourceLoad(): number {
-    sourceLoadRequestRef.current += 1;
+  async function importFile(file: File, id: string): Promise<void> {
+    const token = Symbol(id);
+    sourceLoadRequestRef.current.set(id, token);
     stopPlayback();
-    return sourceLoadRequestRef.current;
-  }
-
-  async function importFile(file: File, preserveArrangement = false, existingRequestId?: number): Promise<void> {
-    const requestId = existingRequestId ?? beginSourceLoad();
-    if (requestId !== sourceLoadRequestRef.current) return;
     try {
       const context = ensureContext();
-      setStatus("Loading upstream Paulstretch WASM…");
+      setStatus(`Loading ${file.name}…`);
       await loadPaulstretchModule();
-      if (requestId !== sourceLoadRequestRef.current) return;
-      const fileBytes = await file.arrayBuffer();
-      if (requestId !== sourceLoadRequestRef.current) return;
-      const decoded = await context.decodeAudioData(fileBytes);
-      if (requestId !== sourceLoadRequestRef.current) return;
-      const stored = preserveArrangement ? false : await storeAudioFile(file);
-      if (requestId !== sourceLoadRequestRef.current) return;
-      stopPlayback();
+      if (sourceLoadRequestRef.current.get(id) !== token) return;
+      const decoded = await context.decodeAudioData(await file.arrayBuffer());
+      if (sourceLoadRequestRef.current.get(id) !== token) return;
+      const previousStore = sourceStorePendingRef.current.get(id);
+      if (previousStore) await previousStore;
+      if (sourceLoadRequestRef.current.get(id) !== token) return;
+      const saving = storeAudioFile(id, file);
+      sourceStorePendingRef.current.set(id, saving);
+      const stored = await saving;
+      if (sourceStorePendingRef.current.get(id) === saving) sourceStorePendingRef.current.delete(id);
+      if (sourceLoadRequestRef.current.get(id) !== token) return;
       const pcm = pcmFromAudioBuffer(decoded);
       const nextDuration = decoded.duration;
-      setSource(pcm);
-      setFileName(file.name);
-      setLoadedSourceFileName(file.name);
-      setDuration(nextDuration);
-      const resetArrangement = !preserveArrangement || persistedStudioState === null;
-      if (resetArrangement) {
-        const initialLayer = createLayer(nextDuration, 0);
-        setLayers([initialLayer]);
+      setSources((current) => current.map((item) =>
+        item.id === id ? { id, name: file.name, duration: nextDuration, audio: pcm } : item
+      ));
+      // Claim initial setup synchronously so another import started from this render cannot reset edited layers.
+      if (!initialArrangementCreatedRef.current) {
+        initialArrangementCreatedRef.current = true;
+        const initialLayer = createLayer(nextDuration, 0, [], id);
         const initialSequence = createSequencer(MAIN_SEQUENCE_ID, "Main sequence", initialLayer.id);
+        setLayers([initialLayer]);
         setSequencers([initialSequence]);
         setActiveSequencerId(MAIN_SEQUENCE_ID);
         setSelectedCellIndex(0);
         setSelectedClipIds(new Set([sequenceClipKey(initialSequence.id, initialSequence.steps[0].id)]));
-        setSelectedCellOpen(false);
+      } else {
+        setLayers((current) => current.map((layer) => {
+          if (layer.sourceId !== id && (layer.sourceId || sources[0]?.id !== id)) return layer;
+          const end = Math.min(nextDuration, Math.max(0.1, layer.segment.end));
+          return { ...layer, sourceId: id, segment: { start: Math.min(layer.segment.start, Math.max(0, end - 0.01)), end } };
+        }));
       }
-      if (stored || preserveArrangement) setRestoredFileName(file.name);
-      setStatus(`${file.name} ready · ${formatSeconds(nextDuration)} · ${decoded.sampleRate.toLocaleString()} Hz`);
+      setStatus(`${file.name} ready · ${formatSeconds(nextDuration)} · ${decoded.sampleRate.toLocaleString()} Hz${stored ? "" : " · not saved for next visit"}`);
     } catch (error) {
-      if (requestId === sourceLoadRequestRef.current) {
+      if (sourceLoadRequestRef.current.get(id) === token) {
         setStatus(error instanceof Error ? error.message : "Could not load that file or the upstream WASM core.");
       }
+    } finally {
+      if (sourceLoadRequestRef.current.get(id) === token) sourceLoadRequestRef.current.delete(id);
     }
   }
 
-  function chooseAudio(): void {
+  function chooseAudio(id: string): void {
+    selectedSourceIdRef.current = id;
     if (fileInputRef.current) fileInputRef.current.value = "";
     fileInputRef.current?.click();
   }
 
-  async function loadRestoredAudio(): Promise<void> {
-    const requestId = beginSourceLoad();
-    const file = await readStoredAudioFile();
-    if (requestId !== sourceLoadRequestRef.current) return;
-    if (!file) {
-      setRestoredFileName("");
-      setStatus("No saved audio file is available.");
-      return;
-    }
-    await importFile(file, true, requestId);
+  function addSource(): void {
+    setSources((current) => [...current, { id: crypto.randomUUID(), name: "", duration: 0, audio: null }]);
+    setExpandedSections((current) => ({ ...current, sources: true }));
   }
 
-  async function playSource(): Promise<void> {
-    if (!source) {
-      setStatus("Import an audio file before playing the source.");
-      return;
-    }
+  function removeSource(id: string): void {
+    sourceLoadRequestRef.current.delete(id);
+    stopPlayback();
+    const remaining = sources.filter((item) => item.id !== id);
+    const next = remaining[0];
+    setSources(remaining.length ? remaining : [{ id: crypto.randomUUID(), name: "", duration: 0, audio: null }]);
+    setLayers((current) => current.map((layer) => (
+      layer.sourceId === id || (!layer.sourceId && sources[0]?.id === id)
+        ? { ...layer, sourceId: next?.id, segment: { start: 0, end: Math.max(0.1, Math.min(next?.duration ?? 4, 4)) } }
+        : layer
+    )));
+    const pendingStore = sourceStorePendingRef.current.get(id);
+    void (async () => {
+      if (pendingStore) await pendingStore;
+      await deleteStoredAudioFile(id);
+    })().catch(() => setStatus("Could not remove the saved audio file."));
+  }
+
+  async function playSource(id: string): Promise<void> {
+    const item = sources.find((candidate) => candidate.id === id);
+    if (!item?.audio) return setStatus("Choose audio before playing this source.");
     playbackRequestRef.current += 1;
     clearProcessing();
-    await playPcm(source, fileName || "source", { kind: "source" }, undefined, false, adsr, false, playbackRequestRef.current);
+    await playPcm(item.audio, item.name || "source", { kind: "source", id }, undefined, false, adsr, false, playbackRequestRef.current);
   }
   function arrangementForPlayback(): Arrangement {
-    if (!source) return arrangement;
-    const repaired = repairGeneratedLayers(source, layers);
-    if (!repaired.changed) return arrangement;
-    setLayers(repaired.layers);
+    const repaired = layers.map((layer) => {
+      const audio = sourceForLayer(layer);
+      return audio ? repairGeneratedLayer(audio, layer) : layer;
+    });
+    if (repaired.every((layer, index) => layer === layers[index])) return arrangement;
+    setLayers(repaired);
     setStatus("Moved silent generated layers to audible source regions.");
-    return { ...arrangement, layers: repaired.layers };
+    return { ...arrangement, layers: repaired };
   }
 
   function isCurrentPlaybackRequest(requestId: number): boolean {
@@ -1823,13 +1861,13 @@ export function App() {
   }
 
   async function previewLayer(layer: Layer): Promise<void> {
-    if (!source) return setStatus("Import a file before previewing.");
+    if (!sourceForLayer(layer)) return setStatus("Choose audio for this layer before previewing.");
     const requestId = await beginProcessing(`Rendering ${layer.name} with upstream Paulstretch…`);
     if (!isCurrentPlaybackRequest(requestId)) return;
     try {
       const playbackArrangement = arrangementForPlayback();
       const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
-      const rendered = await renderLayerCached(source, playableLayer.segment, playableLayer.params);
+      const rendered = await renderLayerCached(sourceForLayer(playableLayer)!, playableLayer.segment, playableLayer.params);
       if (!isCurrentPlaybackRequest(requestId)) return;
       updateProcessingProgress(requestId, 100);
       await playPcm(rendered, playableLayer.name, { kind: "layer", id: playableLayer.id }, undefined, false, adsr, false, requestId);
@@ -1856,7 +1894,7 @@ export function App() {
         await nextPaint();
         return rendered;
       };
-      const rendered = await renderArrangementAsync(source, playbackArrangement, renderWithProgress);
+      const rendered = await renderArrangementAsync(source, playbackArrangement, renderWithProgress, sourceMap);
       if (!isCurrentPlaybackRequest(requestId)) return;
       await playPcm(rendered, `${playableLayers.length} layers`, { kind: "layers" }, undefined, false, adsr, false, requestId);
     } catch (error) {
@@ -1882,7 +1920,7 @@ export function App() {
         await nextPaint();
         return rendered;
       };
-      const rendered = await renderSequencerAsync(source, playbackArrangement, sequence.id, renderWithProgress, adsr);
+      const rendered = await renderSequencerAsync(source, playbackArrangement, sequence.id, renderWithProgress, adsr, undefined, sourceMap);
       if (!isCurrentPlaybackRequest(requestId)) return;
       updateProcessingProgress(requestId, 100);
       await playPcm(rendered, sequence.name, { kind: "sequence", id: sequence.id }, [{ sequenceId: sequence.id, durationSeconds: sequence.durationSeconds, loop: true }], false, null, true, requestId);
@@ -1923,6 +1961,8 @@ export function App() {
           return renderedLayer;
         },
         adsr,
+        undefined,
+        sourceMap,
       );
       if (!isCurrentPlaybackRequest(requestId)) return;
       updateProcessingProgress(requestId, 100);
@@ -1959,7 +1999,7 @@ export function App() {
       }));
       const renderedLayers = new Map<string, PcmAudio>();
       for (const [index, sequence] of playableSequences.entries()) {
-        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, renderLayerCached, adsr, renderedLayers));
+        rendered.push(await renderSequencerAsync(source, playbackArrangement, sequence.id, renderLayerCached, adsr, renderedLayers, sourceMap));
         updateProcessingProgress(requestId, Math.round(((index + 1) / playableSequences.length) * 100));
         if (!isCurrentPlaybackRequest(requestId)) return;
         await nextPaint();
@@ -1986,9 +2026,10 @@ export function App() {
     const affectsPlayback = patch.segment !== undefined
       || patch.offsetSeconds !== undefined
       || patch.gain !== undefined
+      || patch.sourceId !== undefined
       || patch.muted !== undefined;
     if (affectsPlayback) cancelArrangementPlayback();
-    if (patch.muted !== undefined) {
+    if (patch.muted !== undefined || patch.sourceId !== undefined) {
       pendingKeyboardTriggersRef.current.delete(id);
       if (keyboardVoicesRef.current.has(id)) stopKeyboardLayerVoice(id);
     }
@@ -2003,9 +2044,10 @@ export function App() {
   }
 
   function addLayer(): void {
-    if (!source) return setStatus("Import a file before adding layers.");
+    const first = sources.find((item) => item.audio);
+    if (!first) return setStatus("Import a file before adding layers.");
     cancelArrangementPlayback();
-    setLayers((current) => [...current, createLayer(duration, current.length, current.map((layer) => layer.color))]);
+    setLayers((current) => [...current, createLayer(first.duration, current.length, current.map((layer) => layer.color), first.id)]);
   }
 
   function addSequence(): void {
@@ -2043,13 +2085,15 @@ export function App() {
   }
 
   function generateLayers(): void {
-    if (!source) return setStatus("Import a file before generating layers.");
+    const first = sources.find((item) => item.audio);
+    if (!first?.audio) return setStatus("Import a file before generating layers.");
     cancelArrangementPlayback();
-    const generated = generateArrangement(duration, {
+    const generated = generateArrangement(first.duration, {
       count: generatedCount,
       seed: generatedSeed,
       linked: generatedLinked,
-    }, source);
+    }, first.audio);
+    generated.layers.forEach((layer) => { layer.sourceId = first.id; });
     setLayers(generated.layers);
     const generatedSequences = generated.layers.map((layer, index) => ({
       ...createSequencer(`sequence-${Date.now()}-${index + 1}`, `Generated layer ${index + 1}`, layer.id),
@@ -2082,7 +2126,7 @@ export function App() {
     const layer = layers.find((candidate) => candidate.id === layerId);
     cancelArrangementPlayback();
     if (!layer) return;
-    const sourceDuration = Math.max(0.15, duration);
+    const sourceDuration = Math.max(0.15, durationForLayer(layer));
     const length = Math.min(sourceDuration, Math.max(0.15, sourceDuration * (0.08 + Math.random() * 0.24)));
     const start = sourceDuration > length ? Math.random() * (sourceDuration - length) : 0;
     setLayers((current) => current.map((candidate) => (
@@ -2431,45 +2475,52 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className="workspace-section source-section">
-        <div className="section-action-row">
-          <div className="source-header-main">
-            <span className="source-title label-caps">SOURCE</span>
-            {fileName && (
-              <input
-                className="source-filename label-caps"
-                aria-label="Source filename"
-                value={fileName}
-                title={fileName}
-                onChange={(event) => setFileName(event.target.value)}
-              />
-            )}
-            <button className="source-picker-button label-caps" type="button" onClick={chooseAudio} aria-label="Choose audio" title="Choose audio">
-              <span className="wide-control-label">Choose audio</span>
-              <span className="compact-control-label">Audio</span>
-            </button>
-            {restoredFileName && restoredFileName !== loadedSourceFileName && (
-              <button className="source-restore-link" type="button" onClick={() => void loadRestoredAudio()} title={`Restore ${restoredFileName}`}>
-                restore <span>{restoredFileName}</span>
+      <section className="workspace-section sources-section">
+        <SectionHeader
+          controlsId="sources-content"
+          expanded={expandedSections.sources}
+          label="SOURCES"
+          onToggle={() => setExpandedSections((current) => ({ ...current, sources: !current.sources }))}
+          actions={(
+            <div className="section-action-group">
+              <button className="make-button label-caps section-action-control" type="button" onClick={addSource} aria-label="Add source" title="Add source">
+                <span className="wide-control-label">+ Source</span>
+                <span className="compact-control-label">+</span>
               </button>
-            )}
-            <input ref={fileInputRef} className="source-picker-input" type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0])} />
+            </div>
+          )}
+        />
+        {expandedSections.sources && (
+          <div id="sources-content" className="section-content source-list">
+            {sources.map((item, index) => (
+              <div className="source-row" key={item.id}>
+                <span className="source-number mono" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                {item.name || item.audio ? (
+                  <input
+                    className="source-filename"
+                    aria-label={`Source ${index + 1} name`}
+                    value={item.name}
+                    title={item.name}
+                    onChange={(event) => setSources((current) => current.map((candidate) =>
+                      candidate.id === item.id ? { ...candidate, name: event.target.value } : candidate
+                    ))}
+                  />
+                ) : <span className="source-empty-name">Source {index + 1}</span>}
+                <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
+                <div className="source-row-actions">
+                  <button className="source-picker-button label-caps" type="button" onClick={() => chooseAudio(item.id)} aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
+                    <span className="wide-control-label">Choose audio</span>
+                    <span className="compact-control-label">Audio</span>
+                  </button>
+                  <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
+                  <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
+                  <IconButton className="destructive-button" onClick={() => removeSource(item.id)} ariaLabel={`Remove source ${index + 1}`}><CloseIcon /></IconButton>
+                </div>
+              </div>
+            ))}
+            <input ref={fileInputRef} className="source-picker-input" type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" aria-label="Audio file" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0], selectedSourceIdRef.current)} />
           </div>
-          <div className="section-action-group source-section-actions">
-            <span className="source-clock mono">{formatSeconds(elapsedSeconds)}</span>
-            <button
-              className="icon-button section-action-control transport-toggle-button"
-              type="button"
-              onClick={() => void togglePlayback()}
-              disabled={!source && !playbackTargetMatches(playbackTarget, { kind: "source" })}
-              aria-label={playbackTargetMatches(playbackTarget, { kind: "source" }) && playing ? "Pause playback" : playbackTargetMatches(playbackTarget, { kind: "source" }) && paused ? "Resume playback" : "Play source"}
-              title={playbackTargetMatches(playbackTarget, { kind: "source" }) && playing ? "Pause playback" : playbackTargetMatches(playbackTarget, { kind: "source" }) && paused ? "Resume playback" : "Play source"}
-            >
-              {playbackTargetMatches(playbackTarget, { kind: "source" }) && playing ? <PauseIcon /> : <PlayIcon />}
-            </button>
-            <button className="icon-button section-action-control transport-stop-button" type="button" onClick={stopPlayback} disabled={!playing && !paused && !keyboardPlaying && !processing} aria-label="Stop playback" title="Stop playback"><StopIcon /></button>
-          </div>
-        </div>
+        )}
       </section>
 
       <section className="workspace-section layers-section">
@@ -2511,15 +2562,34 @@ export function App() {
                   <span className="layer-color-marker" style={{ backgroundColor: layer.color }} aria-hidden="true" />
                   <div className="layer-row-main">
                     <div className="layer-inline-fields">
-                      <RangeField label="Start" output={duration > 0 ? `${Math.round((layer.segment.start / duration) * 100)}%` : "0%"} ariaLabel={`${layer.name} start`} min={0} max={duration} step={0.01} value={layer.segment.start} onChange={(value) => updateLayer(layer.id, { segment: { ...layer.segment, start: value } })} />
-                      <RangeField label="End" output={duration > 0 ? `${Math.round((layer.segment.end / duration) * 100)}%` : "0%"} ariaLabel={`${layer.name} end`} min={0.01} max={duration} step={0.01} value={layer.segment.end} onChange={(value) => updateLayer(layer.id, { segment: { ...layer.segment, end: value } })} />
+                      <RangeField label="Start" output={durationForLayer(layer) > 0 ? `${Math.round((layer.segment.start / durationForLayer(layer)) * 100)}%` : "0%"} ariaLabel={`${layer.name} start`} min={0} max={durationForLayer(layer)} step={0.01} value={layer.segment.start} onChange={(value) => updateLayer(layer.id, { segment: { ...layer.segment, start: value } })} />
+                      <RangeField label="End" output={durationForLayer(layer) > 0 ? `${Math.round((layer.segment.end / durationForLayer(layer)) * 100)}%` : "0%"} ariaLabel={`${layer.name} end`} min={0.01} max={Math.max(0.01, durationForLayer(layer))} step={0.01} value={layer.segment.end} onChange={(value) => updateLayer(layer.id, { segment: { ...layer.segment, end: value } })} />
                       <RangeField label="Stretch" output={`${layer.params.stretch.toFixed(2)}×`} ariaLabel={`${layer.name} stretch`} min={1} max={40} step={0.5} value={layer.params.stretch} onChange={(value) => updateLayerParams(layer.id, { stretch: value })} />
                       <RangeField label="Offset" output={`${Math.round(layer.offsetSeconds * 1000)}ms`} ariaLabel={`${layer.name} offset`} min={0} max={16} step={0.001} value={layer.offsetSeconds} onChange={(value) => updateLayer(layer.id, { offsetSeconds: value })} />
                       <RangeField label="Gain" output={`${(20 * Math.log10(Math.max(0.0001, layer.gain))).toFixed(2)}dB`} ariaLabel={`${layer.name} gain`} min={0} max={2} step={0.05} value={layer.gain} onChange={(value) => updateLayer(layer.id, { gain: value })} />
                     </div>
-                    <RowActionsMenu className="layer-row-actions" ariaLabel={`${layer.name} actions`}>
+                    <div className="layer-row-actions">
                       <div className="layer-trigger-controls">
                         <kbd className="layer-trigger-key" title={`Keyboard trigger ${LAYER_TRIGGER_BINDINGS[index]?.label ?? "unassigned"}`}>{LAYER_TRIGGER_BINDINGS[index]?.label ?? "—"}</kbd>
+                        <PlayButton onClick={() => void toggleTargetPlayback({ kind: "layer", id: layer.id }, () => previewLayer(layer))} disabled={!sourceForLayer(layer)} ariaLabel={`Play ${layer.name}`} {...targetPlaybackState({ kind: "layer", id: layer.id })} />
+                        <label className="layer-src-label">
+                          <span>src</span>
+                          <select
+                            aria-label={`${layer.name} src`}
+                            value={layer.sourceId ?? sources.find((item) => item.audio)?.id ?? ""}
+                            onChange={(event) => {
+                              const selected = sources.find((item) => item.id === event.target.value);
+                              if (!selected) return;
+                              updateLayer(layer.id, {
+                                sourceId: selected.id,
+                                segment: { start: 0, end: Math.max(0.1, Math.min(selected.duration, 4)) },
+                              });
+                            }}
+                          >
+                            {!sources.some((item) => item.audio) && <option value="">No audio</option>}
+                            {sources.map((item, sourceIndex) => <option key={item.id} value={item.id} disabled={!item.audio}>{sourceIndex + 1} · {item.name || "Choose audio"}</option>)}
+                          </select>
+                        </label>
                         <IconButton
                           className="layer-trigger-mode"
                           pressed={layer.triggerMode === "gate"}
@@ -2529,13 +2599,14 @@ export function App() {
                           <TriggerModeIcon mode={layer.triggerMode === "gate" ? "gate" : "one-shot"} />
                         </IconButton>
                       </div>
-                      <div className="row-icon-actions">
-                        <PlayButton onClick={() => void toggleTargetPlayback({ kind: "layer", id: layer.id }, () => previewLayer(layer))} disabled={!source} ariaLabel={`Play ${layer.name}`} {...targetPlaybackState({ kind: "layer", id: layer.id })} />
-                        <IconButton pressed={!layer.muted} ariaLabel={`${layer.muted ? "Unmute" : "Mute"} ${layer.name}`} onClick={() => updateLayer(layer.id, { muted: !layer.muted })}><HeadphonesIcon /></IconButton>
-                        <IconButton onClick={() => randomizeLayer(layer.id)} ariaLabel={`Randomize ${layer.name}`}><ShuffleIcon /></IconButton>
-                        <IconButton className="destructive-button" onClick={() => removeLayer(layer.id)} ariaLabel={`Remove ${layer.name}`}><CloseIcon /></IconButton>
-                      </div>
-                    </RowActionsMenu>
+                      <RowActionsMenu ariaLabel={`${layer.name} actions`}>
+                        <div className="row-icon-actions">
+                          <IconButton pressed={!layer.muted} ariaLabel={`${layer.muted ? "Unmute" : "Mute"} ${layer.name}`} onClick={() => updateLayer(layer.id, { muted: !layer.muted })}><HeadphonesIcon /></IconButton>
+                          <IconButton onClick={() => randomizeLayer(layer.id)} ariaLabel={`Randomize ${layer.name}`}><ShuffleIcon /></IconButton>
+                          <IconButton className="destructive-button" onClick={() => removeLayer(layer.id)} ariaLabel={`Remove ${layer.name}`}><CloseIcon /></IconButton>
+                        </div>
+                      </RowActionsMenu>
+                    </div>
                   </div>
                 </article>
               ))}
@@ -2823,12 +2894,15 @@ export function App() {
         )}
       </section>
 
-      <div className="processing-footer" role="status" aria-live="polite">
-        <span className="processing-footer-label">{processing ? "PROCESSING" : playing ? "PLAYING" : paused ? "PAUSED" : "STOPPED"}</span>
-        <span className="footer-divider" aria-hidden="true" />
-        <span className="mono">{formatSeconds(elapsedSeconds)}</span>
-        <span className="footer-divider" aria-hidden="true" />
-        <span className="processing-footer-percent">{processingProgress ?? (playing ? 100 : 42)}%</span>
+      <div className="processing-footer">
+        <div className="footer-status" role="status" aria-live="polite">
+          <span className="processing-footer-label">{processing ? "PROCESSING" : playing ? "PLAYING" : paused ? "PAUSED" : "STOPPED"}</span>
+          <span className="footer-divider" aria-hidden="true" />
+          <span className="mono">{formatSeconds(elapsedSeconds)}</span>
+          <span className="footer-divider" aria-hidden="true" />
+          <span className="processing-footer-percent">{processingProgress ?? (playing ? 100 : 42)}%</span>
+        </div>
+        <IconButton className="transport-stop-button footer-stop-button" onClick={stopPlayback} disabled={!playing && !paused && !keyboardPlaying && !processing} ariaLabel="Stop playback"><StopIcon /></IconButton>
       </div>
       <div className="sr-only" aria-live="polite">{status}</div>
     </main>

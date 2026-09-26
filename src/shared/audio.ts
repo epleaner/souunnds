@@ -74,6 +74,7 @@ export interface Segment {
 
 export interface Layer {
   id: string;
+  sourceId?: string;
   name: string;
   color: string;
   segment: Segment;
@@ -315,6 +316,27 @@ export function stretchPcm(audio: PcmAudio, segment: Segment, params: StretchPar
   return { sampleRate: audio.sampleRate, channels: audio.channels, samples: output };
 }
 
+function sourceForLayer(
+  audio: PcmAudio,
+  layer: Layer,
+  sources?: ReadonlyMap<string, PcmAudio>,
+): PcmAudio {
+  if (!sources || layer.sourceId === undefined) return audio;
+  const source = sources.get(layer.sourceId);
+  if (!source) throw new Error(`Audio source "${layer.sourceId}" for layer "${layer.id}" is missing.`);
+  return source;
+}
+
+function mixedSample(clip: PcmAudio, frame: number, channel: number, outputChannels: number): number {
+  const base = frame * clip.channels;
+  if (outputChannels === 1 && clip.channels > 1) {
+    let sum = 0;
+    for (let index = 0; index < clip.channels; index += 1) sum += clip.samples[base + index];
+    return sum / clip.channels;
+  }
+  return clip.samples[base + Math.min(channel, clip.channels - 1)];
+}
+
 function mixArrangementLayers(
   audio: PcmAudio,
   rendered: Array<{ layer: Layer; audio: PcmAudio }>,
@@ -333,7 +355,7 @@ function mixArrangementLayers(
       if (outputFrame >= totalFrames) break;
       for (let channel = 0; channel < audio.channels; channel += 1) {
         const index = outputFrame * audio.channels + channel;
-        output[index] += item.audio.samples[frame * audio.channels + channel] * item.layer.gain;
+        output[index] += mixedSample(item.audio, frame, channel, audio.channels) * item.layer.gain;
       }
     }
   }
@@ -351,10 +373,11 @@ export function renderArrangement(
   audio: PcmAudio,
   arrangement: Arrangement,
   stretch: StretchFunction = stretchPcm,
+  sources?: ReadonlyMap<string, PcmAudio>,
 ): PcmAudio {
   return mixArrangementLayers(audio, arrangement.layers.map((layer) => ({
     layer,
-    audio: stretch(audio, layer.segment, layer.params),
+    audio: stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params),
   })));
 }
 
@@ -362,10 +385,11 @@ export async function renderArrangementAsync(
   audio: PcmAudio,
   arrangement: Arrangement,
   stretch: AsyncStretchFunction,
+  sources?: ReadonlyMap<string, PcmAudio>,
 ): Promise<PcmAudio> {
   const rendered: { layer: Layer; audio: PcmAudio }[] = [];
   for (const layer of arrangement.layers) {
-    rendered.push({ layer, audio: await stretch(audio, layer.segment, layer.params) });
+    rendered.push({ layer, audio: await stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params) });
   }
   return mixArrangementLayers(audio, rendered);
 }
@@ -457,7 +481,7 @@ function mixScheduledLayers(
         : 1;
       for (let channel = 0; channel < audio.channels; channel += 1) {
         output[outputFrame * audio.channels + channel] +=
-          clip.samples[clipFrame * audio.channels + channel] * layer.gain * envelopeGain;
+          mixedSample(clip, clipFrame, channel, audio.channels) * layer.gain * envelopeGain;
       }
     }
   }
@@ -483,11 +507,12 @@ export function renderSequencer(
   sequencerId: string,
   stretch: StretchFunction = stretchPcm,
   adsr?: PlaybackAdsr,
+  sources?: ReadonlyMap<string, PcmAudio>,
 ): PcmAudio {
   const schedule = sequenceSchedule(arrangement, sequencerId);
   const sequenceDuration = arrangement.sequencers.find((sequence) => sequence.id === sequencerId)?.durationSeconds ?? 0.25;
   const rendered = new Map(
-    arrangement.layers.map((layer) => [layer.id, stretch(audio, layer.segment, layer.params)]),
+    arrangement.layers.map((layer) => [layer.id, stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params)]),
   );
   return mixScheduledLayers(audio, arrangement, schedule, rendered, sequenceDuration, adsr);
 }
@@ -499,13 +524,14 @@ export async function renderSequencerAsync(
   stretch: AsyncStretchFunction,
   adsr?: PlaybackAdsr,
   renderedLayers: Map<string, PcmAudio> = new Map(),
+  sources?: ReadonlyMap<string, PcmAudio>,
 ): Promise<PcmAudio> {
   const schedule = sequenceSchedule(arrangement, sequencerId);
   const sequenceDuration = arrangement.sequencers.find((sequence) => sequence.id === sequencerId)?.durationSeconds ?? 0.25;
   const requiredLayerIds = new Set(schedule.map((item) => item.layerId));
   for (const layer of arrangement.layers) {
     if (requiredLayerIds.has(layer.id) && !renderedLayers.has(layer.id)) {
-      renderedLayers.set(layer.id, await stretch(audio, layer.segment, layer.params));
+      renderedLayers.set(layer.id, await stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params));
     }
   }
   return mixScheduledLayers(audio, arrangement, schedule, renderedLayers, sequenceDuration, adsr);
