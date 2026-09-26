@@ -2501,7 +2501,6 @@ export function App() {
                   <span className="wide-control-label">Choose audio</span>
                   <span className="compact-control-label">Audio</span>
                 </button>
-                <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                 {item.name || item.audio ? (
                   <input
                     className="source-filename"
@@ -2514,6 +2513,7 @@ export function App() {
                   />
                 ) : <span className="source-empty-name" aria-hidden="true" />}
                 <div className="source-row-actions">
+                  <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                   <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
                   <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
                   <IconButton className="destructive-button" onClick={() => removeSource(item.id)} ariaLabel={`Remove source ${index + 1}`}><CloseIcon /></IconButton>
