@@ -140,6 +140,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   min-width: 0;
   padding: 2px 0;
   border: 0;
+  font: 400 9px/1.5 var(--mono);
   color: var(--text);
   background: transparent;
   text-overflow: ellipsis;
