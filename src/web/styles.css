@@ -398,10 +398,29 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   position: relative;
   display: flex;
   height: 20px;
-  box-shadow: inset 0 0 0 1px var(--line);
   background: var(--surface);
   color: var(--muted);
   font: 9px/1 var(--mono);
+}
+/* Cover the native chevron without changing the select's full-size hit area. */
+.layer-src-label::before {
+  position: absolute;
+  z-index: 1;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 16px;
+  background: var(--surface);
+  content: "";
+  pointer-events: none;
+}
+.layer-src-label::after {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  border: 1px solid var(--line);
+  content: "";
+  pointer-events: none;
 }
 .layer-src-label span {
   position: absolute;
@@ -412,7 +431,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   align-items: center;
   padding-inline: 4px;
   border-right: 1px solid var(--line);
-  background: var(--surface);
   pointer-events: none;
 }
 .layer-src-label select {
