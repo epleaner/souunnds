@@ -23,10 +23,6 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
-## Git delivery
-
-For every task-owned repository change, including documentation and agent guidance, commit and push the task branch after verification, including worktree branches. This project rule overrides the conservative default in the managed Beads integration below. Explicit instructions not to commit or push take precedence. Stage only task-owned files and preserve unrelated work; never force-push, automatically rebase, or push directly to a protected branch. If no safe remote is available, report the blocked push.
-
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
