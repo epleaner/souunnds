@@ -375,10 +375,12 @@ export function renderArrangement(
   stretch: StretchFunction = stretchPcm,
   sources?: ReadonlyMap<string, PcmAudio>,
 ): PcmAudio {
-  return mixArrangementLayers(audio, arrangement.layers.map((layer) => ({
-    layer,
-    audio: stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params),
-  })));
+  const rendered: Array<{ layer: Layer; audio: PcmAudio }> = [];
+  for (const layer of arrangement.layers) {
+    if (layer.muted) continue;
+    rendered.push({ layer, audio: stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params) });
+  }
+  return mixArrangementLayers(audio, rendered);
 }
 
 export async function renderArrangementAsync(
@@ -389,6 +391,7 @@ export async function renderArrangementAsync(
 ): Promise<PcmAudio> {
   const rendered: { layer: Layer; audio: PcmAudio }[] = [];
   for (const layer of arrangement.layers) {
+    if (layer.muted) continue;
     rendered.push({ layer, audio: await stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params) });
   }
   return mixArrangementLayers(audio, rendered);
@@ -511,9 +514,12 @@ export function renderSequencer(
 ): PcmAudio {
   const schedule = sequenceSchedule(arrangement, sequencerId);
   const sequenceDuration = arrangement.sequencers.find((sequence) => sequence.id === sequencerId)?.durationSeconds ?? 0.25;
-  const rendered = new Map(
-    arrangement.layers.map((layer) => [layer.id, stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params)]),
-  );
+  const requiredLayerIds = new Set(schedule.map((item) => item.layerId));
+  const rendered = new Map<string, PcmAudio>();
+  for (const layer of arrangement.layers) {
+    if (layer.muted || !requiredLayerIds.has(layer.id)) continue;
+    rendered.set(layer.id, stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params));
+  }
   return mixScheduledLayers(audio, arrangement, schedule, rendered, sequenceDuration, adsr);
 }
 
@@ -530,7 +536,7 @@ export async function renderSequencerAsync(
   const sequenceDuration = arrangement.sequencers.find((sequence) => sequence.id === sequencerId)?.durationSeconds ?? 0.25;
   const requiredLayerIds = new Set(schedule.map((item) => item.layerId));
   for (const layer of arrangement.layers) {
-    if (requiredLayerIds.has(layer.id) && !renderedLayers.has(layer.id)) {
+    if (!layer.muted && requiredLayerIds.has(layer.id) && !renderedLayers.has(layer.id)) {
       renderedLayers.set(layer.id, await stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params));
     }
   }

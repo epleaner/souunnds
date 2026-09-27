@@ -48,7 +48,7 @@ export function ThemedSelect({ ariaLabel, value, onValueChange, options, variant
   function choose(index: number) {
     const option = options[index];
     if (!option || !selectable(option)) return;
-    onValueChange(option.value);
+    if (option.value !== value) onValueChange(option.value);
     setOpen(false);
     triggerRef.current?.focus();
   }

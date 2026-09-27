@@ -149,6 +149,28 @@ describe("audio core", () => {
     await expect(renderSequencerAsync(audio, arrangement, "main", async (input) => input, undefined, new Map(), sources)).rejects.toThrow(/missing.*a.*missing/i);
   });
 
+  it("renders audible layers when another referenced layer is muted and its source is unavailable", async () => {
+    const audio: PcmAudio = { sampleRate: 4, channels: 1, samples: new Float32Array([0.2, 0.2, 0.2, 0.2]) };
+    const arrangement: Arrangement = {
+      layers: [
+        { id: "audible", sourceId: "present", name: "Audible", color: "#b9dfe3", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false, triggerMode: "one-shot" },
+        { id: "silent", sourceId: "missing", name: "Silent", color: "#e6c5df", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: true, triggerMode: "one-shot" },
+      ],
+      sequencers: [{ id: "main", name: "Main", muted: false, durationSeconds: 1, steps: [
+        sequenceClip("first", 0, 1, "audible", false),
+        sequenceClip("second", 0, 1, "silent", false),
+      ] }],
+    };
+    const sources = new Map([["present", audio]]);
+    const results = [
+      renderArrangement(audio, arrangement, (input) => input, sources),
+      await renderArrangementAsync(audio, arrangement, async (input) => input, sources),
+      renderSequencer(audio, arrangement, "main", (input) => input, undefined, sources),
+      await renderSequencerAsync(audio, arrangement, "main", async (input) => input, undefined, new Map(), sources),
+    ];
+    for (const result of results) expect([...result.samples]).toEqual([...audio.samples]);
+  });
+
   it("generates the same arrangement for the same seed", () => {
     const first = generateArrangement(20, { count: 3, seed: 42, linked: false });
     const second = generateArrangement(20, { count: 3, seed: 42, linked: false });

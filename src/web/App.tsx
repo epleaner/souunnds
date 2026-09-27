@@ -95,6 +95,7 @@ type KeyboardPlaybackBus = {
   effects: PlaybackEffectNodes;
 };
 const MAX_REVERB_DECAY_SECONDS = 60;
+const DELAY_TAIL_SILENCE_GAIN = 0.001; // -60 dB
 const DEFAULT_PLAYBACK_EFFECTS: PlaybackEffects = {
   reverbMix: 0,
   reverbDecaySeconds: 2.4,
@@ -764,6 +765,19 @@ function updatePlaybackEffectNodes(nodes: PlaybackEffectNodes, effects: Playback
   nodes.compressorDryGain.gain.setTargetAtTime(compressionEnabled ? 0 : 1, now, 0.01);
   nodes.compressorWetGain.gain.setTargetAtTime(compressionEnabled ? 1 : 0, now, 0.01);
 }
+
+function playbackEffectTailSeconds(effects: PlaybackEffects): number {
+  const reverbSeconds = effects.reverbMix > 0 ? effects.reverbPreDelaySeconds + effects.reverbDecaySeconds : 0;
+  let delaySeconds = 0;
+  if (effects.delayMix > 0) {
+    const feedback = Math.min(effects.delayFeedback, 0.85);
+    const repeats = feedback > 0 ? Math.max(1, Math.ceil(Math.log(DELAY_TAIL_SILENCE_GAIN) / Math.log(feedback))) : 1;
+    delaySeconds = effects.delaySeconds * repeats;
+  }
+  const tailSeconds = reverbSeconds + delaySeconds;
+  return tailSeconds > 0 ? tailSeconds + 0.05 : 0;
+}
+
 function repairGeneratedLayer(audio: PcmAudio, layer: Layer): Layer {
   if (!layer.id.startsWith("generated-") || sourceSegmentRms(audio, layer.segment) > 1e-8) return layer;
   const sourceDuration = audio.samples.length / audio.channels / audio.sampleRate;
@@ -1254,9 +1268,13 @@ export function App() {
   const compressorMidAmount = normalizedCompressorAmount(effects.compressorMidAmount);
   const compressorHighAmount = normalizedCompressorAmount(effects.compressorHighAmount);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [tailPlaying, setTailPlaying] = useState(false);
   const contextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const effectNodesRef = useRef<PlaybackEffectNodes | null>(null);
+  const latestEffectsRef = useRef(effects);
+  const effectInputRef = useRef<GainNode | null>(null);
+  const effectTailTimeoutRef = useRef<number | null>(null);
   const playbackStartedAtRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedSourceIdRef = useRef("source");
@@ -1410,12 +1428,23 @@ export function App() {
     return () => cancelAnimationFrame(frameId);
   }, [playing]);
   useEffect(() => {
+    latestEffectsRef.current = effects;
     const nodes = effectNodesRef.current;
     const context = contextRef.current;
     if (nodes && context) updatePlaybackEffectNodes(nodes, effects, context.currentTime);
     const keyboardBus = keyboardBusRef.current;
     if (keyboardBus) updatePlaybackEffectNodes(keyboardBus.effects, effects, keyboardBus.context.currentTime);
   }, [effects]);
+  useEffect(() => {
+    const nodes = effectNodesRef.current;
+    const context = contextRef.current;
+    if (!nodes || !context || effectTailTimeoutRef.current === null) return;
+    if (!retirePlaybackEffectsAfterTail(nodes, context, effects)) {
+      setTailPlaying(false);
+      setPlaybackTarget(null);
+      setStatus("Effects tail finished.");
+    }
+  }, [effects.reverbMix, effects.reverbDecaySeconds, effects.reverbPreDelaySeconds, effects.delayMix, effects.delaySeconds, effects.delayFeedback]);
   useEffect(() => {
     const nodes = effectNodesRef.current;
     const context = contextRef.current;
@@ -1492,6 +1521,21 @@ export function App() {
     };
   }, [adsr, effects, layers, sources]);
   useEffect(() => () => {
+    if (effectTailTimeoutRef.current !== null) window.clearTimeout(effectTailTimeoutRef.current);
+    effectTailTimeoutRef.current = null;
+    const source = sourceNodeRef.current;
+    sourceNodeRef.current = null;
+    if (source) {
+      source.onended = null;
+      source.stop();
+      source.disconnect();
+    }
+    effectNodesRef.current?.disconnect();
+    effectNodesRef.current = null;
+    effectInputRef.current = null;
+    const context = contextRef.current;
+    contextRef.current = null;
+    void context?.close();
     stopAllKeyboardLayerVoices(false);
     const keyboardBus = keyboardBusRef.current;
     keyboardBusRef.current = null;
@@ -1622,20 +1666,60 @@ export function App() {
     setProcessingProgress(null);
   }
 
-  function stopActivePlayback(): void {
+  function stopActivePlayback(preserveEffects = false): void {
     stopAllKeyboardLayerVoices();
     if (contextRef.current?.state === "suspended") void contextRef.current.resume();
     const node = sourceNodeRef.current;
     sourceNodeRef.current = null;
-    node?.stop();
-    effectNodesRef.current?.disconnect();
-    effectNodesRef.current = null;
+    if (node) {
+      node.onended = null;
+      node.stop();
+      node.disconnect();
+    }
+    if (effectTailTimeoutRef.current !== null) window.clearTimeout(effectTailTimeoutRef.current);
+    effectTailTimeoutRef.current = null;
+    if (!preserveEffects) {
+      effectNodesRef.current?.disconnect();
+      effectNodesRef.current = null;
+      effectInputRef.current = null;
+    }
     playbackStartedAtRef.current = null;
     setPlaying(false);
     setPaused(false);
+    setTailPlaying(false);
     setElapsedSeconds(0);
     setSequencePlayback(null);
     setPlaybackTarget(null);
+  }
+
+  function retirePlaybackEffectsAfterTail(nodes: PlaybackEffectNodes, context: AudioContext, currentEffects: PlaybackEffects): boolean {
+    if (effectTailTimeoutRef.current !== null) window.clearTimeout(effectTailTimeoutRef.current);
+    effectTailTimeoutRef.current = null;
+    const tailSeconds = playbackEffectTailSeconds(currentEffects);
+    if (!tailSeconds) {
+      nodes.disconnect();
+      effectNodesRef.current = null;
+      effectInputRef.current = null;
+      return false;
+    }
+    const expiresAt = context.currentTime + tailSeconds;
+    const retire = () => {
+      if (effectNodesRef.current !== nodes || sourceNodeRef.current) return;
+      const remaining = expiresAt - context.currentTime;
+      if (remaining > 0 && context.state !== "closed") {
+        effectTailTimeoutRef.current = window.setTimeout(retire, Math.max(20, Math.ceil(remaining * 1000)));
+        return;
+      }
+      effectTailTimeoutRef.current = null;
+      nodes.disconnect();
+      effectNodesRef.current = null;
+      effectInputRef.current = null;
+      setTailPlaying(false);
+      setPlaybackTarget(null);
+      setStatus("Effects tail finished.");
+    };
+    effectTailTimeoutRef.current = window.setTimeout(retire, Math.ceil(tailSeconds * 1000));
+    return true;
   }
 
   function stopPlayback(): void {
@@ -1657,26 +1741,39 @@ export function App() {
     const context = ensureContext();
     await context.resume();
     if (requestId !== playbackRequestRef.current) return;
-    stopActivePlayback();
     const preparedAudio = playbackAdsr ? applyPlaybackAdsr(audio, playbackAdsr) : audio;
     const node = context.createBufferSource();
     node.buffer = audioBufferFromPcm(context, preparedAudio);
     node.loop = loop;
-    const effectNodes = connectPlaybackEffects(context, node, effects);
-    effectNodesRef.current = effectNodes;
+    stopActivePlayback(true);
+    const effectInput = effectInputRef.current ?? context.createGain();
+    let effectNodes = effectNodesRef.current;
+    if (effectNodes) {
+      updatePlaybackEffectNodes(effectNodes, effects, context.currentTime);
+      const impulse = reverbImpulse(context, effects.reverbDecaySeconds);
+      if (effectNodes.convolver.buffer !== impulse) effectNodes.convolver.buffer = impulse;
+    } else {
+      effectNodes = connectPlaybackEffects(context, effectInput, effects);
+      effectNodesRef.current = effectNodes;
+      effectInputRef.current = effectInput;
+    }
+    node.connect(effectInput);
     node.onended = () => {
       if (sourceNodeRef.current === node) {
         sourceNodeRef.current = null;
-        if (effectNodesRef.current === effectNodes) {
-          effectNodes.disconnect();
-          effectNodesRef.current = null;
-        }
+        node.disconnect();
+        const hasTail = effectNodesRef.current === effectNodes && retirePlaybackEffectsAfterTail(effectNodes, context, latestEffectsRef.current);
         playbackStartedAtRef.current = null;
         setPlaying(false);
         setPaused(false);
+        setTailPlaying(hasTail);
         setElapsedSeconds(0);
         setSequencePlayback(null);
-        setPlaybackTarget(null);
+        if (hasTail) setStatus("Effects tail playing.");
+        else {
+          setPlaybackTarget(null);
+          setStatus("Playback finished.");
+        }
       }
     };
     sourceNodeRef.current = node;
@@ -1757,6 +1854,7 @@ export function App() {
       if (sourceLoadRequestRef.current.get(id) !== token) return;
       const pcm = pcmFromAudioBuffer(decoded);
       const nextDuration = decoded.duration;
+      stopPlayback();
       setSources((current) => current.map((item) =>
         item.id === id ? { id, name: file.name, duration: nextDuration, audio: pcm } : item
       ));
@@ -2469,7 +2567,7 @@ export function App() {
     setSelectedClipIds(new Set([sequenceClipKey(sequence.id, step.id)]));
     setSelectedCellOpen(true);
     window.requestAnimationFrame(() => {
-      const sourceSelect = document.querySelector<HTMLSelectElement>(".cell-inspector select");
+      const sourceSelect = document.querySelector<HTMLButtonElement>(".cell-inspector button[role='combobox']");
       sourceSelect?.focus();
     });
     setSequenceDurationMenuId(null);
@@ -2517,7 +2615,7 @@ export function App() {
                   </button>
                   <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                   <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
-                  <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
+                  <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused && !tailPlaying)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
                   <IconButton className="destructive-button" onClick={() => removeSource(item.id)} ariaLabel={`Remove source ${index + 1}`}><CloseIcon /></IconButton>
                 </div>
               </div>
@@ -2894,13 +2992,13 @@ export function App() {
 
       <div className="processing-footer">
         <div className="footer-status" role="status" aria-live="polite">
-          <span className="processing-footer-label">{processing ? "PROCESSING" : playing ? "PLAYING" : paused ? "PAUSED" : "STOPPED"}</span>
+          <span className="processing-footer-label">{processing ? "PROCESSING" : playing ? "PLAYING" : paused ? "PAUSED" : tailPlaying ? "TAIL" : "STOPPED"}</span>
           <span className="footer-divider" aria-hidden="true" />
           <span className="mono">{formatSeconds(elapsedSeconds)}</span>
           <span className="footer-divider" aria-hidden="true" />
-          <span className="processing-footer-percent">{processingProgress ?? (playing ? 100 : 42)}%</span>
+          <span className="processing-footer-percent">{processingProgress ?? (playing || tailPlaying ? 100 : 42)}%</span>
         </div>
-        <IconButton className="transport-stop-button footer-stop-button" onClick={stopPlayback} disabled={!playing && !paused && !keyboardPlaying && !processing} ariaLabel="Stop playback"><StopIcon /></IconButton>
+        <IconButton className="transport-stop-button footer-stop-button" onClick={stopPlayback} disabled={!playing && !paused && !tailPlaying && !keyboardPlaying && !processing} ariaLabel="Stop playback"><StopIcon /></IconButton>
       </div>
       <div className="sr-only" aria-live="polite">{status}</div>
     </main>
