@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AudioRequestError, extractAudio, videoUrl } from "./youtube-audio.mjs";
 
 const root = resolve(fileURLToPath(new URL("./dist", import.meta.url)));
 const port = Number(process.env.PORT || 4173);
@@ -38,7 +39,68 @@ async function serve(pathname, response) {
   }
 }
 
+async function youtubeAudio(request, response) {
+  const controller = new AbortController();
+  const disconnect = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  response.on("close", disconnect);
+  try {
+    if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+      throw new AudioRequestError(415, "Expected JSON request");
+    }
+    let bytes = 0;
+    const chunks = [];
+    for await (const chunk of request) {
+      bytes += chunk.length;
+      if (bytes > 2048) throw new AudioRequestError(413, "Request is too large");
+      chunks.push(chunk);
+    }
+    let body;
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      throw new AudioRequestError(400, "Invalid JSON");
+    }
+    const url = videoUrl(body?.url);
+    if (!url) throw new AudioRequestError(400, "Enter a valid YouTube video URL");
+    const audio = await extractAudio(url, controller.signal);
+    if (!response.destroyed) {
+      response.writeHead(200, {
+        "Cache-Control": "no-store",
+        "Content-Type": "audio/wav",
+        "Content-Length": audio.length,
+      }).end(audio);
+    }
+  } catch (error) {
+    if (!response.destroyed) {
+      const status = error instanceof AudioRequestError && error.status !== 499 ? error.status : 500;
+      const message = error instanceof AudioRequestError ? error.message : "Audio extraction failed";
+      const payload = JSON.stringify({ error: message });
+      response.writeHead(status, {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json; charset=utf-8",
+      }).end(payload);
+    }
+  } finally {
+    response.off("close", disconnect);
+  }
+}
+
 const server = createServer(async (request, response) => {
+  if (request.url === "/api/youtube/audio") {
+    if (request.method !== "POST") {
+      response.writeHead(405, {
+        Allow: "POST",
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json; charset=utf-8",
+      }).end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    await youtubeAudio(request, response);
+    return;
+  }
+
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.writeHead(405, { Allow: "GET, HEAD" }).end();
     return;

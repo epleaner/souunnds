@@ -1278,6 +1278,14 @@ export function App() {
   const playbackStartedAtRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedSourceIdRef = useRef("source");
+  const audioPopoverRef = useRef<HTMLDivElement | null>(null);
+  const audioPickerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const audioPickerPointerOpenedRef = useRef(false);
+  const youtubeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [youtubeError, setYoutubeError] = useState<{ id: string; message: string } | null>(null);
+  const [youtubeLoadingId, setYoutubeLoadingId] = useState<string | null>(null);
+  const [audioMenuSourceId, setAudioMenuSourceId] = useState<string | null>(null);
   const keyboardBusRef = useRef<KeyboardPlaybackBus | null>(null);
   const keyboardVoicesRef = useRef(new Map<string, KeyboardLayerVoice>());
   const pendingKeyboardTriggersRef = useRef(new Map<string, symbol>());
@@ -1833,8 +1841,35 @@ export function App() {
     return toggleTargetPlayback({ kind: "source", id }, () => playSource(id));
   }
 
+  function setDecodedSource(id: string, name: string, decoded: AudioBuffer): void {
+    const pcm = pcmFromAudioBuffer(decoded);
+    const nextDuration = decoded.duration;
+    stopPlayback();
+    setSources((current) => current.map((item) =>
+      item.id === id ? { id, name, duration: nextDuration, audio: pcm } : item
+    ));
+    // Claim initial setup synchronously so another load started from this render cannot reset edited layers.
+    if (!initialArrangementCreatedRef.current) {
+      initialArrangementCreatedRef.current = true;
+      const initialLayer = createLayer(nextDuration, 0, [], id);
+      const initialSequence = createSequencer(MAIN_SEQUENCE_ID, "Main sequence", initialLayer.id);
+      setLayers([initialLayer]);
+      setSequencers([initialSequence]);
+      setActiveSequencerId(MAIN_SEQUENCE_ID);
+      setSelectedCellIndex(0);
+      setSelectedClipIds(new Set([sequenceClipKey(initialSequence.id, initialSequence.steps[0].id)]));
+    } else {
+      setLayers((current) => current.map((layer) => {
+        if (layer.sourceId !== id && (layer.sourceId || sources[0]?.id !== id)) return layer;
+        const end = Math.min(nextDuration, Math.max(0.1, layer.segment.end));
+        return { ...layer, sourceId: id, segment: { start: Math.min(layer.segment.start, Math.max(0, end - 0.01)), end } };
+      }));
+    }
+  }
+
   async function importFile(file: File, id: string): Promise<void> {
     const token = Symbol(id);
+    if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
     sourceLoadRequestRef.current.set(id, token);
     stopPlayback();
     try {
@@ -1852,30 +1887,8 @@ export function App() {
       const stored = await saving;
       if (sourceStorePendingRef.current.get(id) === saving) sourceStorePendingRef.current.delete(id);
       if (sourceLoadRequestRef.current.get(id) !== token) return;
-      const pcm = pcmFromAudioBuffer(decoded);
-      const nextDuration = decoded.duration;
-      stopPlayback();
-      setSources((current) => current.map((item) =>
-        item.id === id ? { id, name: file.name, duration: nextDuration, audio: pcm } : item
-      ));
-      // Claim initial setup synchronously so another import started from this render cannot reset edited layers.
-      if (!initialArrangementCreatedRef.current) {
-        initialArrangementCreatedRef.current = true;
-        const initialLayer = createLayer(nextDuration, 0, [], id);
-        const initialSequence = createSequencer(MAIN_SEQUENCE_ID, "Main sequence", initialLayer.id);
-        setLayers([initialLayer]);
-        setSequencers([initialSequence]);
-        setActiveSequencerId(MAIN_SEQUENCE_ID);
-        setSelectedCellIndex(0);
-        setSelectedClipIds(new Set([sequenceClipKey(initialSequence.id, initialSequence.steps[0].id)]));
-      } else {
-        setLayers((current) => current.map((layer) => {
-          if (layer.sourceId !== id && (layer.sourceId || sources[0]?.id !== id)) return layer;
-          const end = Math.min(nextDuration, Math.max(0.1, layer.segment.end));
-          return { ...layer, sourceId: id, segment: { start: Math.min(layer.segment.start, Math.max(0, end - 0.01)), end } };
-        }));
-      }
-      setStatus(`${file.name} ready · ${formatSeconds(nextDuration)} · ${decoded.sampleRate.toLocaleString()} Hz${stored ? "" : " · not saved for next visit"}`);
+      setDecodedSource(id, file.name, decoded);
+      setStatus(`${file.name} ready · ${formatSeconds(decoded.duration)} · ${decoded.sampleRate.toLocaleString()} Hz${stored ? "" : " · not saved for next visit"}`);
     } catch (error) {
       if (sourceLoadRequestRef.current.get(id) === token) {
         setStatus(error instanceof Error ? error.message : "Could not load that file or the upstream WASM core.");
@@ -1885,10 +1898,111 @@ export function App() {
     }
   }
 
-  function chooseAudio(id: string): void {
+  function chooseAudio(id: string, button: HTMLButtonElement): void {
+    const panel = audioPopoverRef.current;
+    const wasOpenOnPointerDown = audioPickerPointerOpenedRef.current;
+    audioPickerPointerOpenedRef.current = false;
+    if (!panel) return;
+    if (wasOpenOnPointerDown || (panel.matches(":popover-open") && audioPickerButtonRef.current === button)) {
+      if (panel.matches(":popover-open")) panel.hidePopover();
+      return;
+    }
     selectedSourceIdRef.current = id;
+    audioPickerButtonRef.current = button;
+    setAudioMenuSourceId(id);
+    setYoutubeUrl("");
+    setYoutubeError(null);
+    const bounds = button.getBoundingClientRect();
+    const scale = Number.parseFloat(getComputedStyle(document.body).zoom) || 1;
+    const width = Math.min(300, window.innerWidth - 16);
+    panel.style.width = `${width / scale}px`;
+    if (!panel.matches(":popover-open")) panel.showPopover();
+    const height = panel.getBoundingClientRect().height;
+    const left = Math.max(8, Math.min(bounds.left, window.innerWidth - width - 8));
+    const top = bounds.bottom + height + 8 <= window.innerHeight
+      ? bounds.bottom + 4
+      : Math.max(8, bounds.top - height - 4);
+    panel.style.left = `${left / scale}px`;
+    panel.style.top = `${top / scale}px`;
+    panel.querySelector<HTMLButtonElement>(".source-local-button")?.focus();
+  }
+
+  function chooseLocalFile(): void {
+    if (youtubeRequestRef.current?.id === selectedSourceIdRef.current) {
+      youtubeRequestRef.current.controller.abort();
+      sourceLoadRequestRef.current.delete(selectedSourceIdRef.current);
+      setYoutubeLoadingId(null);
+    }
+    audioPopoverRef.current?.hidePopover();
+    audioPickerButtonRef.current?.focus();
     if (fileInputRef.current) fileInputRef.current.value = "";
     fileInputRef.current?.click();
+  }
+
+  async function loadYoutubeAudio(id: string, url: string): Promise<void> {
+    youtubeRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    youtubeRequestRef.current = { id, controller };
+    const token = Symbol(id);
+    sourceLoadRequestRef.current.set(id, token);
+    setYoutubeError(null);
+    setYoutubeLoadingId(id);
+    setStatus("Loading YouTube audio…");
+    try {
+      const response = await fetch("/api/youtube/audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: url.trim() }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const payload: unknown = await response.json().catch(() => null);
+        const message = payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+          ? payload.error : "Could not get audio from that video.";
+        throw new Error(message);
+      }
+      const decoded = await ensureContext().decodeAudioData(await response.arrayBuffer());
+      if (sourceLoadRequestRef.current.get(id) !== token || controller.signal.aborted) return;
+      await loadPaulstretchModule();
+      if (sourceLoadRequestRef.current.get(id) !== token || controller.signal.aborted) return;
+      const previousStore = sourceStorePendingRef.current.get(id);
+      if (previousStore) await previousStore;
+      if (sourceLoadRequestRef.current.get(id) !== token || controller.signal.aborted) return;
+      // Serialize deletion with any later local import so an old blob cannot reappear on reload.
+      const deleting = (typeof indexedDB === "undefined"
+        ? Promise.resolve()
+        : deleteStoredAudioFile(id)).then(() => true, () => {
+        throw new Error("Could not remove the previously saved audio. Check browser storage and try again.");
+      });
+      sourceStorePendingRef.current.set(id, deleting);
+      try {
+        await deleting;
+      } finally {
+        if (sourceStorePendingRef.current.get(id) === deleting) sourceStorePendingRef.current.delete(id);
+      }
+      if (sourceLoadRequestRef.current.get(id) !== token || controller.signal.aborted) return;
+      setDecodedSource(id, "YouTube audio", decoded);
+      if (selectedSourceIdRef.current === id) {
+        if (audioPopoverRef.current?.matches(":popover-open")) audioPopoverRef.current.hidePopover();
+        setYoutubeUrl("");
+      }
+      setStatus(`YouTube audio ready · ${formatSeconds(decoded.duration)} · ${decoded.sampleRate.toLocaleString()} Hz · not saved for next visit`);
+    } catch (error) {
+      if (sourceLoadRequestRef.current.get(id) === token && !controller.signal.aborted) {
+        const message = `${error instanceof Error ? error.message : "Could not load YouTube audio"} — try another video URL or a local file.`;
+        setYoutubeError({ id, message });
+        setStatus(message);
+        if (selectedSourceIdRef.current === id && audioPopoverRef.current?.matches(":popover-open")) {
+          audioPopoverRef.current.querySelector<HTMLInputElement>(".source-youtube-url")?.focus();
+        }
+      }
+    } finally {
+      if (sourceLoadRequestRef.current.get(id) === token) sourceLoadRequestRef.current.delete(id);
+      if (youtubeRequestRef.current?.controller === controller) {
+        youtubeRequestRef.current = null;
+        setYoutubeLoadingId(null);
+      }
+    }
   }
 
   function addSource(): void {
@@ -1898,6 +2012,8 @@ export function App() {
 
   function removeSource(id: string): void {
     sourceLoadRequestRef.current.delete(id);
+    if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
+    if (selectedSourceIdRef.current === id && audioPopoverRef.current?.matches(":popover-open")) audioPopoverRef.current.hidePopover();
     stopPlayback();
     const remaining = sources.filter((item) => item.id !== id);
     const next = remaining[0];
@@ -2609,7 +2725,9 @@ export function App() {
                   />
                 ) : <span className="source-empty-name" aria-hidden="true" />}
                 <div className="source-row-actions">
-                  <button className="source-picker-button label-caps" type="button" onClick={() => chooseAudio(item.id)} aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
+                  <button className="source-picker-button label-caps" type="button" onPointerDownCapture={(event) => {
+                    audioPickerPointerOpenedRef.current = audioPopoverRef.current?.matches(":popover-open") === true && audioPickerButtonRef.current === event.currentTarget;
+                  }} onClick={(event) => chooseAudio(item.id, event.currentTarget)} aria-expanded={audioMenuSourceId === item.id} aria-controls="source-audio-popover" aria-label={`Choose audio for source ${index + 1}`} title="Choose audio">
                     <span className="wide-control-label">Choose audio</span>
                     <span className="compact-control-label">Audio</span>
                   </button>
@@ -2621,6 +2739,49 @@ export function App() {
               </div>
             ))}
             <input ref={fileInputRef} className="source-picker-input" type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/*" aria-label="Audio file" onChange={(event) => event.target.files?.[0] && void importFile(event.target.files[0], selectedSourceIdRef.current)} />
+            <div
+              ref={audioPopoverRef}
+              id="source-audio-popover"
+              className="control-popover source-audio-popover"
+              popover="auto"
+              role="group"
+              aria-label="Choose source audio"
+              onToggle={(event) => {
+                if (event.newState === "closed" && !event.currentTarget.matches(":popover-open")) setAudioMenuSourceId(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  audioPopoverRef.current?.hidePopover();
+                  audioPickerButtonRef.current?.focus();
+                  event.stopPropagation();
+                }
+              }}
+            >
+              <button className="make-button source-local-button" type="button" onClick={chooseLocalFile}>Local file…</button>
+              <form onSubmit={(event) => {
+                event.preventDefault();
+                if (!youtubeUrl.trim()) return;
+                void loadYoutubeAudio(selectedSourceIdRef.current, youtubeUrl);
+              }}>
+                <label htmlFor="source-youtube-url">YouTube video URL</label>
+                <input
+                  id="source-youtube-url"
+                  className="source-youtube-url"
+                  name="youtube-url"
+                  type="url"
+                  placeholder="https://www.youtube.com/watch?v=…"
+                  autoComplete="url"
+                  required
+                  value={youtubeUrl}
+                  aria-invalid={youtubeError?.id === selectedSourceIdRef.current}
+                  aria-describedby={youtubeError?.id === selectedSourceIdRef.current ? "source-youtube-error" : undefined}
+                  onChange={(event) => { setYoutubeUrl(event.target.value); setYoutubeError(null); }}
+                />
+                {youtubeError?.id === selectedSourceIdRef.current && <p id="source-youtube-error" className="source-youtube-error" role="alert">{youtubeError.message}</p>}
+                {youtubeLoadingId === selectedSourceIdRef.current && <p className="source-youtube-status" role="status">Loading audio… Your current source is still available.</p>}
+                <button className="make-button" type="submit">Load YouTube audio</button>
+              </form>
+            </div>
           </div>
         )}
       </section>
