@@ -94,6 +94,7 @@ type KeyboardPlaybackBus = {
   input: GainNode;
   effects: PlaybackEffectNodes;
 };
+const MAX_REVERB_DECAY_SECONDS = 60;
 const DEFAULT_PLAYBACK_EFFECTS: PlaybackEffects = {
   reverbMix: 0,
   reverbDecaySeconds: 2.4,
@@ -270,7 +271,7 @@ function readPersistedEffects(value: unknown): PlaybackEffects {
   const effects = value as Partial<PlaybackEffects>;
   return {
     reverbMix: isFiniteNumber(effects.reverbMix) ? clampNumber(effects.reverbMix, 0, 1) : DEFAULT_PLAYBACK_EFFECTS.reverbMix,
-    reverbDecaySeconds: isFiniteNumber(effects.reverbDecaySeconds) ? clampNumber(effects.reverbDecaySeconds, 0.2, 8) : DEFAULT_PLAYBACK_EFFECTS.reverbDecaySeconds,
+    reverbDecaySeconds: isFiniteNumber(effects.reverbDecaySeconds) ? clampNumber(effects.reverbDecaySeconds, 0.2, MAX_REVERB_DECAY_SECONDS) : DEFAULT_PLAYBACK_EFFECTS.reverbDecaySeconds,
     reverbPreDelaySeconds: isFiniteNumber(effects.reverbPreDelaySeconds) ? clampNumber(effects.reverbPreDelaySeconds, 0, 0.25) : DEFAULT_PLAYBACK_EFFECTS.reverbPreDelaySeconds,
     reverbDampingHz: isFiniteNumber(effects.reverbDampingHz) ? clampNumber(effects.reverbDampingHz, 500, 18000) : DEFAULT_PLAYBACK_EFFECTS.reverbDampingHz,
     delayMix: isFiniteNumber(effects.delayMix) ? clampNumber(effects.delayMix, 0, 1) : DEFAULT_PLAYBACK_EFFECTS.delayMix,
@@ -563,7 +564,7 @@ function audioBufferFromPcm(context: AudioContext, audio: PcmAudio): AudioBuffer
   return buffer;
 }
 function reverbImpulse(context: AudioContext, decaySeconds: number): AudioBuffer {
-  const normalizedDecay = clampNumber(decaySeconds, 0.2, 8);
+  const normalizedDecay = clampNumber(decaySeconds, 0.2, MAX_REVERB_DECAY_SECONDS);
   const cached = reverbImpulseCache.get(context);
   if (cached?.decaySeconds === normalizedDecay) return cached.buffer;
   const length = Math.ceil(context.sampleRate * normalizedDecay);
@@ -2867,7 +2868,7 @@ export function App() {
               <div className="effects-grid">
                 <div className="effect-row reverb-effect-row">
                   <span className="effect-name">Reverb</span>
-                  <RangeField label="Decay" ariaLabel="Reverb decay" output={`${effects.reverbDecaySeconds.toFixed(1)}s`} min={0.2} max={8} step={0.1} value={effects.reverbDecaySeconds} onChange={(value) => setEffects({ ...effects, reverbDecaySeconds: value })} />
+                  <RangeField label="Decay" ariaLabel="Reverb decay" output={`${effects.reverbDecaySeconds.toFixed(1)}s`} min={0.2} max={MAX_REVERB_DECAY_SECONDS} step={0.1} value={effects.reverbDecaySeconds} onChange={(value) => setEffects({ ...effects, reverbDecaySeconds: value })} />
                   <RangeField label="Pre-delay" ariaLabel="Reverb pre-delay" output={`${Math.round(effects.reverbPreDelaySeconds * 1000)}ms`} min={0} max={0.25} step={0.005} value={effects.reverbPreDelaySeconds} onChange={(value) => setEffects({ ...effects, reverbPreDelaySeconds: value })} />
                   <RangeField label="Damping" ariaLabel="Reverb damping" output={`${(effects.reverbDampingHz / 1000).toFixed(1)}kHz`} min={500} max={18000} step={100} value={effects.reverbDampingHz} onChange={(value) => setEffects({ ...effects, reverbDampingHz: value })} />
                   <RangeField label="Wet / dry" ariaLabel="Reverb wet dry" output={`${Math.round(effects.reverbMix * 100)}%`} min={0} max={1} step={0.01} value={effects.reverbMix} onChange={(value) => setEffects({ ...effects, reverbMix: value })} />

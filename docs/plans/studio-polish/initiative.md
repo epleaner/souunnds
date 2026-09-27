@@ -1,6 +1,6 @@
 # Studio UI polish
 
-State: complete. Original polish, themed dropdowns, slider consistency, and visible-gap correction were published on `origin/ep/sources-section`; Beads `tunestretch-6q2`, `tunestretch-2nl`, `tunestretch-txl`, and `tunestretch-dbf` are closed.
+State: original polish, themed dropdowns, slider consistency, and visible-gap correction shipped on `origin/ep/sources-section`; Beads `tunestretch-6q2`, `tunestretch-2nl`, `tunestretch-txl`, and `tunestretch-dbf` are closed. Reverb decay extension is active in Bead `tunestretch-aq3`.
 
 ## Goal and independent acceptance items
 1. Source rows: move Choose audio to the right, directly left of each duration timestamp, including compact layout and empty/long filenames.
@@ -43,3 +43,8 @@ Bead `tunestretch-dbf` addresses the actual visual gap: ADSR reserved 48px and e
 Using a DOM Range around each output's text, a browser measured **6 rendered px from slider to visible text** for all 49 layer, ADSR, Reverb, Delay, and Compressor controls at 1289px and 320px. ADSR slider and effect label starts stayed aligned at x129/x126, output right edges stayed at x908/x308, and document width matched each viewport. At 320px, changing Reverb Wet / dry from 0% to 100% and back kept the visible gap at 6px and output right edge x308; browser errors and console errors were empty.
 
 `npm run build`, `npm test` (18/18), and staged `git diff --check` passed. Correction published at `048bced`; Bead `tunestretch-dbf` closed with no open follow-up.
+
+## Reverb decay range follow-on
+Bead `tunestretch-aq3` extends Reverb Decay to 60 seconds at its shared maximum used by the slider, persisted-state normalization, and Web Audio impulse generation. Pre-delay is the 0–250 ms DelayNode before convolution on the wet path (default 20 ms); damping is the 500–18,000 Hz low-pass filter after convolution on the wet path (default 8,000 Hz). Neither is essential to produce reverb, but each offers independent control over onset separation or tail brightness; both remain unchanged. Reverb Wet / dry defaults to 0%, so increasing it is necessary to hear the wet path.
+
+In the browser, End selected `60.0s`, local storage retained 60 across reload, and live source playback created a 2-channel impulse of 2,880,000 samples per channel at 48,000 Hz (60 s). Home produced a 0.2 s impulse; the initial 2.4 s setting was restored. At 320px, `60.0s` kept its 6 rendered px visible slider/value gap, right edge x308, and no horizontal overflow; browser errors were empty. Existing playback disconnects the effect graph when a non-looping source ends, so this range change does not keep the tail ringing after a short source stops. `npm run build`, `npm test` (18/18), and `git diff --check` passed. Next action: publish and close Bead `tunestretch-aq3`.
