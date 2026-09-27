@@ -1,6 +1,6 @@
 # Studio UI polish
 
-State: original polish and slider consistency shipped; Beads `tunestretch-6q2`, `tunestretch-txl`, and `tunestretch-2nl` closed on `origin/ep/sources-section`. Visible slider-value spacing correction is active in Bead `tunestretch-dbf`.
+State: complete. Original polish, themed dropdowns, slider consistency, and visible-gap correction were published on `origin/ep/sources-section`; Beads `tunestretch-6q2`, `tunestretch-2nl`, `tunestretch-txl`, and `tunestretch-dbf` are closed.
 
 ## Goal and independent acceptance items
 1. Source rows: move Choose audio to the right, directly left of each duration timestamp, including compact layout and empty/long filenames.
@@ -42,4 +42,4 @@ Bead `tunestretch-dbf` addresses the actual visual gap: ADSR reserved 48px and e
 
 Using a DOM Range around each output's text, a browser measured **6 rendered px from slider to visible text** for all 49 layer, ADSR, Reverb, Delay, and Compressor controls at 1289px and 320px. ADSR slider and effect label starts stayed aligned at x129/x126, output right edges stayed at x908/x308, and document width matched each viewport. At 320px, changing Reverb Wet / dry from 0% to 100% and back kept the visible gap at 6px and output right edge x308; browser errors and console errors were empty.
 
-`npm run build`, `npm test` (18/18), and `git diff --check` passed. Next action: publish the correction and close Bead `tunestretch-dbf`.
+`npm run build`, `npm test` (18/18), and staged `git diff --check` passed. Correction published at `048bced`; Bead `tunestretch-dbf` closed with no open follow-up.
