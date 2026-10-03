@@ -64,11 +64,12 @@ async function youtubeAudio(request, response) {
     }
     const url = videoUrl(body?.url);
     if (!url) throw new AudioRequestError(400, "Enter a valid YouTube video URL");
-    const audio = await extractAudio(url, controller.signal);
+    const { audio, title } = await extractAudio(url, controller.signal);
     if (!response.destroyed) {
       response.writeHead(200, {
         "Cache-Control": "no-store",
         "Content-Type": "audio/wav",
+        "X-Source-Title": encodeURIComponent(title),
         "Content-Length": audio.length,
       }).end(audio);
     }

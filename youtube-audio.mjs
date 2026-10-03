@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
 const TIMEOUT_MS = 90_000;
+const TITLE_PREFIX = "__TUNESTRETCH_TITLE__";
 const MAX_ACTIVE = 2;
 let active = 0;
 
@@ -79,9 +80,12 @@ function runConversion(url, signal) {
     }
     const downloader = spawn("yt-dlp", [
       "--no-config", "--no-cache-dir", "--no-playlist", "--quiet", "--no-warnings",
+      "--no-js-runtimes", "--js-runtimes", "node",
+      "--extractor-args", "youtube:player_client=web_embedded",
+      "--print", `before_dl:${TITLE_PREFIX}%(title)j`,
       // Fragmented streams write temporary -FragN files even with "-o -"; only direct HTTPS uses stdout.
       "-f", "bestaudio[protocol=https]", "-o", "-", url,
-    ], { stdio: ["ignore", "pipe", "ignore"] });
+    ], { stdio: ["ignore", "pipe", "pipe"] });
     const converter = spawn("ffmpeg", [
       "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
       "-vn", "-map_metadata", "-1", "-bitexact",
@@ -89,6 +93,7 @@ function runConversion(url, signal) {
     ], { stdio: ["pipe", "pipe", "ignore"] });
     const chunks = [];
     let length = 0;
+    let stderr = "";
     let downloaderClosed = false;
     let converterClosed = false;
     let settled = false;
@@ -106,7 +111,17 @@ function runConversion(url, signal) {
         reject(error);
       } else {
         try {
-          resolve(finalizeWav(chunks, length));
+          const titleLine = stderr.split("\n").find((line) => line.startsWith(TITLE_PREFIX));
+          let title;
+          try {
+            title = JSON.parse(titleLine?.slice(TITLE_PREFIX.length) ?? "null");
+          } catch {
+            // Invalid metadata is reported as a failed extraction below.
+          }
+          if (typeof title !== "string" || !title.trim()) {
+            throw new AudioRequestError(502, "Could not read video title");
+          }
+          resolve({ audio: finalizeWav(chunks, length), title });
         } catch (cause) {
           reject(cause);
         }
@@ -117,6 +132,10 @@ function runConversion(url, signal) {
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
     downloader.stdout.pipe(converter.stdin);
+    downloader.stderr.setEncoding("utf8");
+    downloader.stderr.on("data", (text) => {
+      if (stderr.length < 2048) stderr += text.slice(0, 2048 - stderr.length);
+    });
     for (const stream of [downloader.stdout, converter.stdin, converter.stdout]) {
       stream.on("error", () => finish(new AudioRequestError(502, "Audio conversion failed")));
     }

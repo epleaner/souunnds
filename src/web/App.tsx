@@ -26,6 +26,8 @@ const MIN_CLIP_DURATION_SECONDS = 0.25;
 const MIN_SEQUENCE_DURATION_SECONDS = 0.25;
 const DEFAULT_CLIP_DURATION_SECONDS = 1;
 const DEFAULT_SEQUENCE_DURATION_SECONDS = 8;
+const SEQUENCE_DENSITY_LABELS = ["Sparse", "Balanced", "Dense"] as const;
+const CLIP_DURATION_LABELS = ["Short", "Medium", "Long"] as const;
 
 type SequenceTrack = { sequenceId: string; durationSeconds: number; loop: boolean };
 type SequencePlayback = { tracks: SequenceTrack[]; startedAt: number; pausedAt?: number; simultaneous: boolean; loop: boolean };
@@ -835,6 +837,14 @@ function StopIcon() {
     </svg>
   );
 }
+function RestoreIcon() {
+  return (
+    <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 5a4.25 4.25 0 1 1 .75 3.7M2 2.5V5h2.5" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
@@ -857,7 +867,7 @@ function IconButton({
   className?: string;
   disabled?: boolean;
   expanded?: boolean;
-  onClick: () => void;
+  onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   pressed?: boolean;
 }) {
   return (
@@ -955,6 +965,7 @@ function RangeField({
   output,
   step,
   value,
+  valueText,
 }: {
   ariaLabel?: string;
   className?: string;
@@ -965,11 +976,12 @@ function RangeField({
   output: string;
   step: number;
   value: number;
+  valueText?: string;
 }) {
   return (
     <label className={`range-field ${className}`.trim()}>
       <span className="range-field-label">{label}</span>
-      <input aria-label={ariaLabel ?? label} type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input aria-label={ariaLabel ?? label} aria-valuetext={valueText} type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
       <output>{output}</output>
     </label>
   );
@@ -1238,6 +1250,10 @@ export function App() {
   const [generatedLinked, setGeneratedLinked] = useState(true);
   const [generatedSequenceRows, setGeneratedSequenceRows] = useState(4);
   const [generatedSequenceColumns, setGeneratedSequenceColumns] = useState(8);
+  const [generatedSequenceDensity, setGeneratedSequenceDensity] = useState(3);
+  const [generatedClipDuration, setGeneratedClipDuration] = useState(2);
+  const sequenceDensityLabel = SEQUENCE_DENSITY_LABELS[generatedSequenceDensity - 1];
+  const clipDurationLabel = CLIP_DURATION_LABELS[generatedClipDuration - 1];
   const [status, setStatus] = useState("Import an audio file to begin.");
   const [processing, setProcessing] = useState<string | null>(null);
   const [processingProgress, setProcessingProgress] = useState<number | null>(null);
@@ -1294,6 +1310,17 @@ export function App() {
   const processingRequestRef = useRef<number | null>(null);
   const sourceLoadRequestRef = useRef(new Map<string, symbol>());
   const sourceStorePendingRef = useRef(new Map<string, Promise<boolean>>());
+  const [cachedSourceIds, setCachedSourceIds] = useState<Set<string>>(() => new Set());
+  const restoringSourceIdsRef = useRef(new Set<string>());
+  function markCachedSource(id: string, cached: boolean): void {
+    setCachedSourceIds((current) => {
+      if (current.has(id) === cached) return current;
+      const next = new Set(current);
+      if (cached) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
   const initialArrangementCreatedRef = useRef(layers.length > 0 || sequencers.length > 0);
 
   const renderCacheRef = useRef(new WeakMap<PcmAudio, Map<string, Promise<PcmAudio>>>());
@@ -1352,6 +1379,7 @@ export function App() {
     for (const item of persistedStudioState?.sources ?? [{ id: "source", name: readStoredSourceFileName(), duration: 0 }]) {
       void readStoredAudioFile(item.id).then(async (file) => {
         if (!file || cancelled || sourceLoadRequestRef.current.has(item.id)) return;
+        markCachedSource(item.id, true);
         const token = Symbol(item.id);
         sourceLoadRequestRef.current.set(item.id, token);
         try {
@@ -1867,6 +1895,42 @@ export function App() {
     }
   }
 
+  async function restoreCachedAudio(id: string, button: HTMLButtonElement): Promise<void> {
+    if (restoringSourceIdsRef.current.has(id)) return;
+    restoringSourceIdsRef.current.add(id);
+    const token = Symbol(id);
+    if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
+    sourceLoadRequestRef.current.set(id, token);
+    setStatus("Restoring cached audio…");
+    try {
+      const pendingStore = sourceStorePendingRef.current.get(id);
+      if (pendingStore) await pendingStore;
+      if (sourceLoadRequestRef.current.get(id) !== token) return;
+      const file = await readStoredAudioFile(id);
+      if (sourceLoadRequestRef.current.get(id) !== token) return;
+      if (!file) {
+        if (document.activeElement === button) {
+          button.parentElement?.querySelector<HTMLButtonElement>(".source-picker-button")?.focus();
+        }
+        markCachedSource(id, false);
+        setStatus("Cached audio is no longer available. Choose audio to replace it.");
+        return;
+      }
+      const decoded = await ensureContext().decodeAudioData(await file.arrayBuffer());
+      if (sourceLoadRequestRef.current.get(id) !== token) return;
+      stopPlayback();
+      setSources((current) => current.map((item) =>
+        item.id === id ? { ...item, audio: pcmFromAudioBuffer(decoded), duration: decoded.duration } : item
+      ));
+      setStatus(`${file.name} restored · ${formatSeconds(decoded.duration)} · ${decoded.sampleRate.toLocaleString()} Hz`);
+    } catch {
+      if (sourceLoadRequestRef.current.get(id) === token) setStatus("Could not restore cached audio. Choose audio to replace it.");
+    } finally {
+      if (sourceLoadRequestRef.current.get(id) === token) sourceLoadRequestRef.current.delete(id);
+      restoringSourceIdsRef.current.delete(id);
+    }
+  }
+
   async function importFile(file: File, id: string): Promise<void> {
     const token = Symbol(id);
     if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
@@ -1887,6 +1951,7 @@ export function App() {
       const stored = await saving;
       if (sourceStorePendingRef.current.get(id) === saving) sourceStorePendingRef.current.delete(id);
       if (sourceLoadRequestRef.current.get(id) !== token) return;
+      if (stored) markCachedSource(id, true);
       setDecodedSource(id, file.name, decoded);
       setStatus(`${file.name} ready · ${formatSeconds(decoded.duration)} · ${decoded.sampleRate.toLocaleString()} Hz${stored ? "" : " · not saved for next visit"}`);
     } catch (error) {
@@ -1961,6 +2026,9 @@ export function App() {
           ? payload.error : "Could not get audio from that video.";
         throw new Error(message);
       }
+      const encodedTitle = response.headers.get("X-Source-Title");
+      if (!encodedTitle) throw new Error("Could not read video title.");
+      const title = decodeURIComponent(encodedTitle);
       const decoded = await ensureContext().decodeAudioData(await response.arrayBuffer());
       if (sourceLoadRequestRef.current.get(id) !== token || controller.signal.aborted) return;
       await loadPaulstretchModule();
@@ -1980,8 +2048,9 @@ export function App() {
       } finally {
         if (sourceStorePendingRef.current.get(id) === deleting) sourceStorePendingRef.current.delete(id);
       }
+      markCachedSource(id, false);
       if (sourceLoadRequestRef.current.get(id) !== token || controller.signal.aborted) return;
-      setDecodedSource(id, "YouTube audio", decoded);
+      setDecodedSource(id, title, decoded);
       if (selectedSourceIdRef.current === id) {
         if (audioPopoverRef.current?.matches(":popover-open")) audioPopoverRef.current.hidePopover();
         setYoutubeUrl("");
@@ -2011,6 +2080,7 @@ export function App() {
   }
 
   function removeSource(id: string): void {
+    markCachedSource(id, false);
     sourceLoadRequestRef.current.delete(id);
     if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
     if (selectedSourceIdRef.current === id && audioPopoverRef.current?.matches(":popover-open")) audioPopoverRef.current.hidePopover();
@@ -2380,27 +2450,39 @@ export function App() {
     setStatus(`Randomized ${sequence.name}.`);
   }
 
-  function randomSequenceStep(slotStartSeconds: number, slotDuration = 2): SequenceStep {
+  function randomSequenceStep(slotStartSeconds: number, durationLevel: number, slotDuration = 2): SequenceStep {
     const targetId = layers[Math.floor(Math.random() * layers.length)]?.id ?? "";
     const durationSeconds = roundTimelineSeconds(Math.min(
       slotDuration - MIN_CLIP_DURATION_SECONDS,
-      0.5 + Math.random(),
+      MIN_CLIP_DURATION_SECONDS + (durationLevel - 1) * 0.5 + Math.random() * 0.5,
     ));
     const availableStartRange = Math.max(0, slotDuration - durationSeconds);
     const startSeconds = roundTimelineSeconds(slotStartSeconds + Math.random() * availableStartRange);
     return createSequenceStep(targetId, startSeconds, durationSeconds, Math.random() >= 0.35);
   }
 
+  function randomSequenceSteps(columnCount: number, clipCount: number, durationLevel: number): SequenceStep[] {
+    const steps: SequenceStep[] = [];
+    let remaining = clipCount;
+    for (let column = 0; column < columnCount; column += 1) {
+      if (Math.random() * (columnCount - column) >= remaining) continue;
+      steps.push(randomSequenceStep(column * 2, durationLevel));
+      remaining -= 1;
+    }
+    return steps;
+  }
+
   function generateSequences(): void {
     if (!source || !layers.length) return setStatus("Add a layer before generating sequences.");
     const rowCount = isFiniteNumber(generatedSequenceRows) ? Math.round(clampNumber(generatedSequenceRows, 1, 12)) : 1;
     const columnCount = isFiniteNumber(generatedSequenceColumns) ? Math.round(clampNumber(generatedSequenceColumns, 1, 32)) : 1;
+    const clipsPerSequence = Math.max(1, Math.round(columnCount * (0.25 + (generatedSequenceDensity - 1) * 0.375)));
     const generatedAt = Date.now();
     const durationSeconds = Math.max(DEFAULT_SEQUENCE_DURATION_SECONDS, columnCount * 2);
     const generatedSequences = Array.from({ length: rowCount }, (_, index) => ({
       ...createSequencer(`sequence-${generatedAt}-${index + 1}`, `Sequence ${index + 1}`, layers[0].id),
       durationSeconds,
-      steps: Array.from({ length: columnCount }, (_, clipIndex) => randomSequenceStep(clipIndex * 2)),
+      steps: randomSequenceSteps(columnCount, clipsPerSequence, generatedClipDuration),
     }));
     setGeneratedSequenceRows(rowCount);
     setGeneratedSequenceColumns(columnCount);
@@ -2412,7 +2494,7 @@ export function App() {
     setSelectedClipIds(new Set([sequenceClipKey(generatedSequences[0].id, firstGeneratedStep.id)]));
     setSelectedCellOpen(false);
     setSequenceGeneratorOpen(false);
-    setStatus(`Generated ${rowCount} sequences with ${columnCount} clips each.`);
+    setStatus(`Generated ${rowCount} sequences with ${clipsPerSequence} ${clipsPerSequence === 1 ? "clip" : "clips"} each.`);
   }
 
   function removeSequence(sequenceId = activeSequencer?.id): void {
@@ -2731,6 +2813,7 @@ export function App() {
                     <span className="wide-control-label">Choose audio</span>
                     <span className="compact-control-label">Audio</span>
                   </button>
+                  {cachedSourceIds.has(item.id) && <IconButton onClick={(event) => void restoreCachedAudio(item.id, event.currentTarget)} ariaLabel={`Restore cached audio for source ${index + 1}`}><RestoreIcon /></IconButton>}
                   <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                   <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
                   <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused && !tailPlaying)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
@@ -2763,7 +2846,7 @@ export function App() {
                 if (!youtubeUrl.trim()) return;
                 void loadYoutubeAudio(selectedSourceIdRef.current, youtubeUrl);
               }}>
-                <label htmlFor="source-youtube-url">YouTube video URL</label>
+                <label htmlFor="source-youtube-url" onPointerDown={(event) => { event.currentTarget.control?.setAttribute("data-pointer-focus", ""); }}>YouTube video URL</label>
                 <input
                   id="source-youtube-url"
                   className="source-youtube-url"
@@ -2775,6 +2858,8 @@ export function App() {
                   value={youtubeUrl}
                   aria-invalid={youtubeError?.id === selectedSourceIdRef.current}
                   aria-describedby={youtubeError?.id === selectedSourceIdRef.current ? "source-youtube-error" : undefined}
+                  onPointerDown={(event) => { event.currentTarget.dataset.pointerFocus = ""; }}
+                  onBlur={(event) => { delete event.currentTarget.dataset.pointerFocus; }}
                   onChange={(event) => { setYoutubeUrl(event.target.value); setYoutubeError(null); }}
                 />
                 {youtubeError?.id === selectedSourceIdRef.current && <p id="source-youtube-error" className="source-youtube-error" role="alert">{youtubeError.message}</p>}
@@ -2902,6 +2987,12 @@ export function App() {
                 <div className="generator-form-row">
                   <label>Rows<input aria-label="Sequence rows" type="number" min="1" max="12" value={generatedSequenceRows} onChange={(event) => setGeneratedSequenceRows(Number(event.target.value))} /></label>
                   <label>Columns<input aria-label="Sequence columns" type="number" min="1" max="32" value={generatedSequenceColumns} onChange={(event) => setGeneratedSequenceColumns(Number(event.target.value))} /></label>
+                </div>
+                <div className="sequence-generator-controls">
+                  <RangeField label="Density" min={1} max={3} step={1} value={generatedSequenceDensity} onChange={setGeneratedSequenceDensity} output={sequenceDensityLabel} valueText={sequenceDensityLabel} />
+                  <RangeField label="Clip duration" min={1} max={3} step={1} value={generatedClipDuration} onChange={setGeneratedClipDuration} output={clipDurationLabel} valueText={clipDurationLabel} />
+                </div>
+                <div className="generator-form-row sequence-generator-actions">
                   <button className="make-button label-caps" type="button" onClick={generateSequences} disabled={!source || !layers.length}>Generate</button>
                 </div>
               </DropdownPanel>

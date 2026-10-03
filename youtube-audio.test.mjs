@@ -32,6 +32,7 @@ async function startServer(mode = "success") {
   const downloader = `#!/usr/bin/env node
 const fs = require('node:fs');
 fs.writeFileSync(process.env.CALL_MARKER, String(process.pid));
+if (process.env.MODE !== 'missing-title') process.stderr.write('__TUNESTRETCH_TITLE__"Björk — 夏"\\n');
 if (process.env.MODE === 'hang') setInterval(() => {}, 1000);
 else process.stdout.write('encoded-audio');
 `;
@@ -96,12 +97,21 @@ it("pipes downloader output into converter and returns finalized decodable WAV",
   const response = await request(port, "https://youtu.be/abcdefghijk");
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("audio/wav");
+  expect(decodeURIComponent(response.headers.get("x-source-title"))).toBe("Björk — 夏");
   expect(response.headers.get("cache-control")).toBe("no-store");
   const wav = Buffer.from(await response.arrayBuffer());
   expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
   expect(wav.readUInt32LE(4)).toBe(wav.length - 8);
   expect(wav.readUInt32LE(40)).toBe(wav.length - 44);
   expect(wav.readInt16LE(46)).toBe(32767);
+});
+
+it("rejects a completed download without a video title", async () => {
+  const { port } = await startServer("missing-title");
+  const response = await request(port, "https://www.youtube.com/watch?v=abcdefghijk");
+  expect(response.status).toBe(502);
+  expect(response.headers.get("x-source-title")).toBeNull();
+  expect(await response.json()).toEqual({ error: "Could not read video title" });
 });
 
 it("returns only JSON if conversion fails after writing WAV output", async () => {

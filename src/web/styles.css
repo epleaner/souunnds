@@ -270,8 +270,9 @@ button:focus-visible, input:focus-visible {
 }
 .source-audio-popover .make-button { width: 100%; height: 26px; text-align: left; padding-inline: 6px; }
 .source-audio-popover .make-button:focus-visible,
-.source-audio-popover input:focus-visible,
+.source-audio-popover input:focus-visible:not([data-pointer-focus]),
 .source-picker-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.source-audio-popover input:focus-visible[data-pointer-focus] { outline: none; }
 .source-youtube-error, .source-youtube-status { margin: 0; overflow-wrap: anywhere; }
 .source-youtube-error { color: var(--accent); }
 .source-youtube-status { color: var(--muted); }
@@ -343,6 +344,13 @@ button:focus-visible, input:focus-visible {
   min-height: 20px;
   padding: 2px 7px;
 }
+.sequence-generator-controls { display: grid; gap: 8px; min-width: 0; }
+.sequence-generator-controls .range-field {
+  grid-template-columns: 100px minmax(0, 1fr) 42px;
+  color: var(--muted);
+  font: 400 8px/1.5 var(--mono);
+}
+.sequence-generator-actions { justify-content: flex-end; }
 .layer-list {
   display: grid;
   max-height: 160px;
@@ -1054,6 +1062,8 @@ input[type="number"], input[type="text"] {
   .generator-form-row label {
     justify-content: space-between;
   }
+  .sequence-generator-controls .range-field { grid-template-columns: minmax(0, 1fr) 42px; row-gap: 8px; }
+  .sequence-generator-controls .range-field-label { grid-column: 1 / -1; }
   .generator-form-row .generator-link-button,
   .generator-form-row .make-button {
     align-self: flex-end;
