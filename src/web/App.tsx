@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SyntheticEvent as ReactSyntheticEvent } from "react";
 import {
   DEFAULT_PLAYBACK_ADSR,
   applyPlaybackAdsr,
@@ -22,6 +22,17 @@ import { ThemedSelect } from "./ThemedSelect";
 const MAIN_SEQUENCE_ID = "main-sequencer";
 const SOURCE_FILE_NAME_STORAGE_KEY = "souunnds.source-file-name";
 const STUDIO_STATE_STORAGE_KEY = "souunnds.studio-state";
+function studioStateStorageKey(): string {
+  if (typeof window === "undefined") return STUDIO_STATE_STORAGE_KEY;
+  try {
+    const openProject = JSON.parse(window.sessionStorage.getItem("souunnds.open-project") ?? "null");
+    return typeof openProject?.id === "string" && /^[A-Za-z0-9_-]{20,64}$/.test(openProject.id)
+      ? `souunnds.project-state.${openProject.id}`
+      : STUDIO_STATE_STORAGE_KEY;
+  } catch {
+    return STUDIO_STATE_STORAGE_KEY;
+  }
+}
 const MIN_CLIP_DURATION_SECONDS = 0.25;
 const MIN_SEQUENCE_DURATION_SECONDS = 0.25;
 const DEFAULT_CLIP_DURATION_SECONDS = 1;
@@ -141,8 +152,8 @@ type PersistedSequencer = {
   gapLengthSeconds?: unknown;
   steps?: unknown;
 };
-type AudioSource = { id: string; name: string; duration: number; audio: PcmAudio | null };
-type StoredSource = Pick<AudioSource, "id" | "name" | "duration">;
+type AudioSource = { id: string; name: string; duration: number; audio: PcmAudio | null; sourceUrl?: string; assetId?: string };
+type StoredSource = Pick<AudioSource, "id" | "name" | "duration" | "sourceUrl" | "assetId">;
 type PersistedStudioState = {
   sources: StoredSource[];
   layers: Layer[];
@@ -289,12 +300,12 @@ function readPersistedEffects(value: unknown): PlaybackEffects {
 function readPersistedStudioState(): PersistedStudioState | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(STUDIO_STATE_STORAGE_KEY);
+    const raw = window.localStorage.getItem(studioStateStorageKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedStudioState> & { duration?: number };
     const layerColors: string[] = [];
     const storedSources = Array.isArray(parsed.sources)
-      ? parsed.sources.filter((item): item is StoredSource => !!item && typeof item.id === "string" && typeof item.name === "string" && isFiniteNumber(item.duration) && item.duration >= 0)
+      ? parsed.sources.filter((item): item is StoredSource => !!item && typeof item.id === "string" && typeof item.name === "string" && isFiniteNumber(item.duration) && item.duration >= 0 && (item.sourceUrl === undefined || (typeof item.sourceUrl === "string" && item.sourceUrl.length <= 2048 && item.sourceUrl.startsWith("https://")) ) && (item.assetId === undefined || (typeof item.assetId === "string" && /^[A-Za-z0-9_-]{20,40}$/.test(item.assetId))) && !(item.sourceUrl && item.assetId))
       : [];
     const legacyName = readStoredSourceFileName();
     const sources = storedSources.length ? storedSources : [{ id: "source", name: legacyName, duration: isFiniteNumber(parsed.duration) ? parsed.duration : 0 }];
@@ -359,7 +370,29 @@ function openStoredAudioDb(): Promise<IDBDatabase> {
   return promise;
 }
 
-async function storeAudioFile(id: string, file: File): Promise<boolean> {
+function activeAudioProjectId(): string | null {
+  try {
+    const opened = JSON.parse(window.sessionStorage.getItem("souunnds.open-project") ?? "null");
+    return typeof opened?.id === "string" && /^[A-Za-z0-9_-]{20,64}$/.test(opened.id) ? opened.id : null;
+  } catch {
+    return null;
+  }
+}
+
+function audioStorageKey(id: string, projectId: string | null): string {
+  return projectId ? `${projectId}:${id}` : id;
+}
+
+function ownsLocalProject(projectId: string): boolean {
+  try {
+    const owner = JSON.parse(window.localStorage.getItem(`souunnds.project-owner.${projectId}`) ?? "null");
+    return typeof owner?.capability === "string";
+  } catch {
+    return false;
+  }
+}
+
+async function storeAudioFile(id: string, file: File, projectId = activeAudioProjectId()): Promise<boolean> {
   let database: IDBDatabase | null = null;
   try {
     database = await openStoredAudioDb();
@@ -370,7 +403,7 @@ async function storeAudioFile(id: string, file: File): Promise<boolean> {
       name: file.name,
       type: file.type,
       lastModified: file.lastModified,
-    } satisfies StoredAudioRecord, id);
+    } satisfies StoredAudioRecord, audioStorageKey(id, projectId));
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error("Could not store the audio file."));
     await promise;
@@ -382,33 +415,35 @@ async function storeAudioFile(id: string, file: File): Promise<boolean> {
   }
 }
 
-async function readStoredAudioFile(id: string): Promise<File | null> {
+async function readStoredAudioFile(id: string, projectId = activeAudioProjectId(), allowLegacyOwnerFile = true): Promise<File | null> {
   let database: IDBDatabase | null = null;
   try {
     database = await openStoredAudioDb();
-    const { promise, resolve } = Promise.withResolvers<File | null>();
-    const transaction = database.transaction(STORED_AUDIO_STORE_NAME, "readonly");
-    const request = transaction.objectStore(STORED_AUDIO_STORE_NAME).get(id);
-    request.onsuccess = () => {
-      const record = request.result as StoredAudioRecord | undefined;
-      resolve(record ? new File([record.blob], record.name, { type: record.type, lastModified: record.lastModified }) : null);
-    };
-    request.onerror = () => resolve(null);
-    transaction.onabort = () => resolve(null);
-    return await promise;
+    const read = (key: string) => new Promise<StoredAudioRecord | undefined>((resolve) => {
+      const transaction = database!.transaction(STORED_AUDIO_STORE_NAME, "readonly");
+      const request = transaction.objectStore(STORED_AUDIO_STORE_NAME).get(key);
+      request.onsuccess = () => resolve(request.result as StoredAudioRecord | undefined);
+      request.onerror = () => resolve(undefined);
+      transaction.onabort = () => resolve(undefined);
+    });
+    let record = await read(audioStorageKey(id, projectId));
+    // Existing owner projects may still have browser audio under the pre-share source key.
+    if (allowLegacyOwnerFile && !record && projectId && ownsLocalProject(projectId)) record = await read(id);
+    return record ? new File([record.blob], record.name, { type: record.type, lastModified: record.lastModified }) : null;
   } catch {
     return null;
   } finally {
     database?.close();
   }
 }
-async function deleteStoredAudioFile(id: string): Promise<void> {
+
+async function deleteStoredAudioFile(id: string, projectId = activeAudioProjectId()): Promise<void> {
   let database: IDBDatabase | null = null;
   try {
     database = await openStoredAudioDb();
     const { promise, resolve, reject } = Promise.withResolvers<void>();
     const transaction = database.transaction(STORED_AUDIO_STORE_NAME, "readwrite");
-    transaction.objectStore(STORED_AUDIO_STORE_NAME).delete(id);
+    transaction.objectStore(STORED_AUDIO_STORE_NAME).delete(audioStorageKey(id, projectId));
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error("Could not remove stored audio."));
     await promise;
@@ -861,6 +896,7 @@ function IconButton({
   expanded,
   onClick,
   pressed,
+  allowReadOnly = false,
 }: {
   ariaLabel: string;
   children: ReactNode;
@@ -869,6 +905,7 @@ function IconButton({
   expanded?: boolean;
   onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   pressed?: boolean;
+  allowReadOnly?: boolean;
 }) {
   return (
     <button
@@ -880,6 +917,7 @@ function IconButton({
       aria-pressed={pressed}
       aria-label={ariaLabel}
       title={ariaLabel}
+      data-readonly-action={allowReadOnly ? "true" : undefined}
     >
       {children}
     </button>
@@ -949,7 +987,7 @@ function PlayButton({
       ? ariaLabel.replace(/^Play /, "Resume ")
       : ariaLabel;
   return (
-    <IconButton className={`play-icon-button ${isPlaying ? "is-playing" : ""} ${className}`.trim()} onClick={onClick} disabled={disabled} ariaLabel={actionLabel}>
+    <IconButton className={`play-icon-button ${isPlaying ? "is-playing" : ""} ${className}`.trim()} onClick={onClick} disabled={disabled} ariaLabel={actionLabel} allowReadOnly>
       {isPlaying ? <PauseIcon /> : <PlayIcon />}
     </IconButton>
   );
@@ -1065,6 +1103,7 @@ function SectionHeader({
         aria-expanded={expanded}
         aria-controls={controlsId}
         onClick={onToggle}
+        data-readonly-action="true"
       >
         <span>{label}</span>
         <SectionMarker expanded={expanded} />
@@ -1255,6 +1294,42 @@ export function App() {
   const sequenceDensityLabel = SEQUENCE_DENSITY_LABELS[generatedSequenceDensity - 1];
   const clipDurationLabel = CLIP_DURATION_LABELS[generatedClipDuration - 1];
   const [status, setStatus] = useState("Import an audio file to begin.");
+  const [ownerProject, setOwnerProject] = useState<{ id: string; capability: string; revision: number } | null>(() => {
+    try {
+      const opened = JSON.parse(window.sessionStorage.getItem("souunnds.open-project") ?? "null");
+      if (!opened || typeof opened.id !== "string" || !/^[A-Za-z0-9_-]{20,64}$/.test(opened.id)) return null;
+      const owner = JSON.parse(window.localStorage.getItem(`souunnds.project-owner.${opened.id}`) ?? "null");
+      return owner && typeof owner.capability === "string" && Number.isSafeInteger(opened.revision)
+        ? { id: opened.id, capability: owner.capability, revision: opened.revision }
+        : null;
+    } catch {
+      return null;
+    }
+  });
+  const [openedProjectId, setOpenedProjectId] = useState<string | null>(() => {
+    try {
+      const opened = JSON.parse(window.sessionStorage.getItem("souunnds.open-project") ?? "null");
+      return typeof opened?.id === "string" ? opened.id : null;
+    } catch {
+      return null;
+    }
+  });
+  const [remoteConflictRevision, setRemoteConflictRevision] = useState<number | null>(() => {
+    try {
+      const opened = JSON.parse(window.sessionStorage.getItem("souunnds.open-project") ?? "null");
+      return Number.isSafeInteger(opened?.conflictRevision) && opened.conflictRevision > opened.revision
+        ? opened.conflictRevision as number : null;
+    } catch {
+      return null;
+    }
+  });
+  const [shareStatus, setShareStatus] = useState("");
+  const [includeSourceAudio, setIncludeSourceAudio] = useState(false);
+  const projectRevisionRef = useRef(ownerProject?.revision ?? 1);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const saveTimerRef = useRef<number | null>(null);
+  const saveSnapshotRef = useRef<() => Promise<void>>(async () => {});
+  const saveErrorRef = useRef(false);
   const [processing, setProcessing] = useState<string | null>(null);
   const [processingProgress, setProcessingProgress] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -1297,7 +1372,7 @@ export function App() {
   const audioPopoverRef = useRef<HTMLDivElement | null>(null);
   const audioPickerButtonRef = useRef<HTMLButtonElement | null>(null);
   const audioPickerPointerOpenedRef = useRef(false);
-  const youtubeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
+  const youtubeRequestsRef = useRef(new Map<string, AbortController>());
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubeError, setYoutubeError] = useState<{ id: string; message: string } | null>(null);
   const [youtubeLoadingId, setYoutubeLoadingId] = useState<string | null>(null);
@@ -1364,6 +1439,7 @@ export function App() {
   })), [layers]);
 
 
+  const readOnlySharedProject = openedProjectId !== null && ownerProject?.id !== openedProjectId;
   useEffect(() => {
     const validClipIds = new Set(sequencers.flatMap((sequence) => (
       sequence.steps.map((step) => sequenceClipKey(sequence.id, step.id))
@@ -1374,9 +1450,20 @@ export function App() {
     });
   }, [sequencers]);
 
+  // This is a one-time bootstrap. Forking changes project state explicitly; re-reading the
+  // module's original manifest after that transition would restore stale asset IDs.
   useEffect(() => {
     let cancelled = false;
     for (const item of persistedStudioState?.sources ?? [{ id: "source", name: readStoredSourceFileName(), duration: 0 }]) {
+      if (item.assetId) {
+        void loadHostedAudio(item.id, item.name, item.assetId);
+        continue;
+      }
+      if (item.sourceUrl) {
+        void loadYoutubeAudio(item.id, item.sourceUrl);
+        continue;
+      }
+      if (readOnlySharedProject) continue;
       void readStoredAudioFile(item.id).then(async (file) => {
         if (!file || cancelled || sourceLoadRequestRef.current.has(item.id)) return;
         markCachedSource(item.id, true);
@@ -1399,26 +1486,109 @@ export function App() {
   }, []);
 
 
+  const studioState = {
+    sources: sources.map(({ id, name, duration: length, sourceUrl, assetId }) => ({ id, name, duration: length, ...(sourceUrl ? { sourceUrl } : {}), ...(assetId ? { assetId } : {}) })),
+    layers,
+    sequencers,
+    adsr,
+    effects: {
+      ...effects,
+      compressorLowAmount,
+      compressorMidAmount,
+      compressorHighAmount,
+    },
+    activeSequencerId,
+    selectedCellIndex,
+  };
+  const lastPersistedStateRef = useRef<string | null>(null);
   useEffect(() => {
+    const serializedState = JSON.stringify(studioState);
     try {
-      window.localStorage.setItem(STUDIO_STATE_STORAGE_KEY, JSON.stringify({
-        sources: sources.map(({ id, name, duration: length }) => ({ id, name, duration: length })),
-        layers,
-        sequencers,
-        adsr,
-        effects: {
-          ...effects,
-          compressorLowAmount,
-          compressorMidAmount,
-          compressorHighAmount,
-        },
-        activeSequencerId,
-        selectedCellIndex,
-      }));
+      window.localStorage.setItem(studioStateStorageKey(), serializedState);
+      if (ownerProject && lastPersistedStateRef.current !== null && serializedState !== lastPersistedStateRef.current) {
+        window.localStorage.setItem(`souunnds.project-dirty.${ownerProject.id}`, "true");
+      }
     } catch {
       // Storage can be unavailable in private or restricted browser contexts.
     }
-  }, [activeSequencerId, adsr, effects, layers, selectedCellIndex, sequencers, sources]);
+    lastPersistedStateRef.current = serializedState;
+  }, [activeSequencerId, adsr, effects, layers, ownerProject?.id, selectedCellIndex, sequencers, sources]);
+
+  useEffect(() => {
+    if (!ownerProject) return;
+    const stateSnapshot = JSON.stringify(studioState);
+    const manifest = {
+      version: 1,
+      sources: studioState.sources.map((source) => source.sourceUrl
+        ? { id: source.id, name: source.name, duration: source.duration, kind: "youtube" as const, url: source.sourceUrl }
+        : source.assetId
+          ? { id: source.id, name: source.name, duration: source.duration, kind: "asset" as const, assetId: source.assetId }
+          : { id: source.id, name: source.name, duration: source.duration, kind: "missing" as const }),
+      state: studioState,
+    };
+    saveSnapshotRef.current = async () => {
+      saveErrorRef.current = false;
+      const response = await fetch(`/api/projects/${ownerProject.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${ownerProject.capability}`,
+          "If-Match": `"${projectRevisionRef.current}"`,
+        },
+        body: JSON.stringify({ manifest }),
+      });
+      if (response.status === 409) {
+        saveErrorRef.current = true;
+        try {
+          const latestResponse = await fetch(`/api/projects/${ownerProject.id}`, { cache: "no-store" });
+          if (latestResponse.ok) {
+            const latest = await latestResponse.json() as { revision: number };
+            if (Number.isSafeInteger(latest.revision) && latest.revision > projectRevisionRef.current) {
+              setRemoteConflictRevision(latest.revision);
+              window.sessionStorage.setItem("souunnds.open-project", JSON.stringify({
+                id: ownerProject.id,
+                revision: projectRevisionRef.current,
+                conflictRevision: latest.revision,
+              }));
+              setShareStatus("The online project has newer changes. Your local draft is preserved.");
+              return;
+            }
+          }
+        } catch {
+          // Keep the local draft and revision if the online version cannot be read.
+        }
+        setShareStatus("This project changed elsewhere. Your local draft is preserved.");
+        return;
+      }
+      if (!response.ok) throw new Error("Could not save the shared project.");
+      const saved = await response.json() as { revision: number };
+      projectRevisionRef.current = saved.revision;
+      window.sessionStorage.setItem("souunnds.open-project", JSON.stringify({ id: ownerProject.id, revision: saved.revision }));
+      try {
+        window.localStorage.setItem(`souunnds.project-revision.${ownerProject.id}`, String(saved.revision));
+        const currentState = window.localStorage.getItem(`souunnds.project-state.${ownerProject.id}`);
+        window.localStorage.setItem(`souunnds.project-dirty.${ownerProject.id}`, currentState === stateSnapshot ? "false" : "true");
+      } catch {
+        // The remote save still succeeded if local metadata storage is unavailable.
+      }
+      setRemoteConflictRevision(null);
+      setShareStatus("Saved");
+    };
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      saveQueueRef.current = saveQueueRef.current
+        .then(() => saveSnapshotRef.current())
+        .catch(() => {
+          saveErrorRef.current = true;
+          setShareStatus("Could not save online. Your local copy is still saved.");
+        });
+    }, 900);
+    return () => {
+      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    };
+  }, [activeSequencerId, adsr, effects, layers, ownerProject?.capability, ownerProject?.id, selectedCellIndex, sequencers, sources]);
+
 
   useEffect(() => {
     if (!sequencePlayback) {
@@ -1869,13 +2039,14 @@ export function App() {
     return toggleTargetPlayback({ kind: "source", id }, () => playSource(id));
   }
 
-  function setDecodedSource(id: string, name: string, decoded: AudioBuffer): void {
+  function setDecodedSource(id: string, name: string, decoded: AudioBuffer, sourceRef: { sourceUrl?: string; assetId?: string } = {}): void {
     const pcm = pcmFromAudioBuffer(decoded);
     const nextDuration = decoded.duration;
     stopPlayback();
     setSources((current) => current.map((item) =>
-      item.id === id ? { id, name, duration: nextDuration, audio: pcm } : item
+      item.id === id ? { id, name, duration: nextDuration, audio: pcm, ...sourceRef } : item
     ));
+    if (readOnlySharedProject) return;
     // Claim initial setup synchronously so another load started from this render cannot reset edited layers.
     if (!initialArrangementCreatedRef.current) {
       initialArrangementCreatedRef.current = true;
@@ -1899,7 +2070,7 @@ export function App() {
     if (restoringSourceIdsRef.current.has(id)) return;
     restoringSourceIdsRef.current.add(id);
     const token = Symbol(id);
-    if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
+    youtubeRequestsRef.current.get(id)?.abort();
     sourceLoadRequestRef.current.set(id, token);
     setStatus("Restoring cached audio…");
     try {
@@ -1933,7 +2104,7 @@ export function App() {
 
   async function importFile(file: File, id: string): Promise<void> {
     const token = Symbol(id);
-    if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
+    youtubeRequestsRef.current.get(id)?.abort();
     sourceLoadRequestRef.current.set(id, token);
     stopPlayback();
     try {
@@ -1993,21 +2164,70 @@ export function App() {
   }
 
   function chooseLocalFile(): void {
-    if (youtubeRequestRef.current?.id === selectedSourceIdRef.current) {
-      youtubeRequestRef.current.controller.abort();
-      sourceLoadRequestRef.current.delete(selectedSourceIdRef.current);
-      setYoutubeLoadingId(null);
-    }
+    youtubeRequestsRef.current.get(selectedSourceIdRef.current)?.abort();
+    sourceLoadRequestRef.current.delete(selectedSourceIdRef.current);
+    setYoutubeLoadingId((current) => current === selectedSourceIdRef.current ? null : current);
     audioPopoverRef.current?.hidePopover();
     audioPickerButtonRef.current?.focus();
     if (fileInputRef.current) fileInputRef.current.value = "";
     fileInputRef.current?.click();
   }
 
+  async function loadHostedAudio(id: string, name: string, assetId: string): Promise<void> {
+    const projectId = (() => {
+      try {
+        const opened = JSON.parse(window.sessionStorage.getItem("souunnds.open-project") ?? "null") as { id?: unknown } | null;
+        return typeof opened?.id === "string" ? opened.id : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!projectId) return;
+    const token = Symbol(id);
+    sourceLoadRequestRef.current.set(id, token);
+    const isCurrentProjectLoad = () => activeAudioProjectId() === projectId;
+    setStatus(`Loading shared audio ${name}…`);
+    try {
+      const response = await fetch(`/api/projects/${projectId}/assets/${assetId}`, { cache: "no-store" });
+      if (sourceLoadRequestRef.current.get(id) !== token || !isCurrentProjectLoad()) return;
+      if (!response.ok) throw new Error("Shared audio is unavailable. Ask the project owner to check the file.");
+      const { url } = await response.json() as { url: string };
+      const audioResponse = await fetch(url);
+      if (sourceLoadRequestRef.current.get(id) !== token || !isCurrentProjectLoad()) return;
+      if (!audioResponse.ok) throw new Error("Could not download shared audio. Try reloading the project.");
+      const decoded = await ensureContext().decodeAudioData(await audioResponse.arrayBuffer());
+      if (sourceLoadRequestRef.current.get(id) !== token || !isCurrentProjectLoad()) return;
+      setDecodedSource(id, name, decoded, { assetId });
+      setStatus(`${name} restored from shared project · ${formatSeconds(decoded.duration)} · ${decoded.sampleRate.toLocaleString()} Hz`);
+    } catch (error) {
+      if (sourceLoadRequestRef.current.get(id) === token && isCurrentProjectLoad() && ownerProject?.id === projectId) {
+        const cached = await readStoredAudioFile(id, projectId, false);
+        if (cached && sourceLoadRequestRef.current.get(id) === token && isCurrentProjectLoad()) {
+          try {
+            const decoded = await ensureContext().decodeAudioData(await cached.arrayBuffer());
+            if (sourceLoadRequestRef.current.get(id) === token && isCurrentProjectLoad()) {
+              markCachedSource(id, true);
+              setDecodedSource(id, name, decoded, { assetId });
+              setStatus(`${name} restored from this browser's saved audio · ${formatSeconds(decoded.duration)} · ${decoded.sampleRate.toLocaleString()} Hz`);
+              return;
+            }
+          } catch {
+            // Report the hosted-load failure when the local copy is also unusable.
+          }
+        }
+      }
+      if (sourceLoadRequestRef.current.get(id) === token && isCurrentProjectLoad()) {
+        setStatus(error instanceof Error ? error.message : "Could not restore shared audio.");
+      }
+    } finally {
+      if (sourceLoadRequestRef.current.get(id) === token) sourceLoadRequestRef.current.delete(id);
+    }
+  }
+
   async function loadYoutubeAudio(id: string, url: string): Promise<void> {
-    youtubeRequestRef.current?.controller.abort();
+    youtubeRequestsRef.current.get(id)?.abort();
     const controller = new AbortController();
-    youtubeRequestRef.current = { id, controller };
+    youtubeRequestsRef.current.set(id, controller);
     const token = Symbol(id);
     sourceLoadRequestRef.current.set(id, token);
     setYoutubeError(null);
@@ -2050,7 +2270,7 @@ export function App() {
       }
       markCachedSource(id, false);
       if (sourceLoadRequestRef.current.get(id) !== token || controller.signal.aborted) return;
-      setDecodedSource(id, title, decoded);
+      setDecodedSource(id, title, decoded, { sourceUrl: url.trim() });
       if (selectedSourceIdRef.current === id) {
         if (audioPopoverRef.current?.matches(":popover-open")) audioPopoverRef.current.hidePopover();
         setYoutubeUrl("");
@@ -2067,9 +2287,9 @@ export function App() {
       }
     } finally {
       if (sourceLoadRequestRef.current.get(id) === token) sourceLoadRequestRef.current.delete(id);
-      if (youtubeRequestRef.current?.controller === controller) {
-        youtubeRequestRef.current = null;
-        setYoutubeLoadingId(null);
+      if (youtubeRequestsRef.current.get(id) === controller) {
+        youtubeRequestsRef.current.delete(id);
+        setYoutubeLoadingId((current) => current === id ? [...youtubeRequestsRef.current.keys()].at(-1) ?? null : current);
       }
     }
   }
@@ -2082,7 +2302,7 @@ export function App() {
   function removeSource(id: string): void {
     markCachedSource(id, false);
     sourceLoadRequestRef.current.delete(id);
-    if (youtubeRequestRef.current?.id === id) youtubeRequestRef.current.controller.abort();
+    youtubeRequestsRef.current.get(id)?.abort();
     if (selectedSourceIdRef.current === id && audioPopoverRef.current?.matches(":popover-open")) audioPopoverRef.current.hidePopover();
     stopPlayback();
     const remaining = sources.filter((item) => item.id !== id);
@@ -2112,7 +2332,7 @@ export function App() {
       const audio = sourceForLayer(layer);
       return audio ? repairGeneratedLayer(audio, layer) : layer;
     });
-    if (repaired.every((layer, index) => layer === layers[index])) return arrangement;
+    if (repaired.every((layer, index) => layer === layers[index]) || readOnlySharedProject) return arrangement;
     setLayers(repaired);
     setStatus("Moved silent generated layers to audible source regions.");
     return { ...arrangement, layers: repaired };
@@ -2772,8 +2992,244 @@ export function App() {
     setStatus(`Added clip at ${formatSeconds(step.startSeconds)}.`);
   }
 
+  async function shareOrFork(): Promise<void> {
+    const createManifest = (projectSources: StoredSource[], state: PersistedStudioState) => ({
+      version: 1,
+      sources: projectSources.map((source) => source.sourceUrl
+        ? { id: source.id, name: source.name, duration: source.duration, kind: "youtube" as const, url: source.sourceUrl }
+        : source.assetId
+          ? { id: source.id, name: source.name, duration: source.duration, kind: "asset" as const, assetId: source.assetId }
+          : { id: source.id, name: source.name, duration: source.duration, kind: "missing" as const }),
+      state,
+    });
+    if (ownerProject) {
+      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      saveQueueRef.current = saveQueueRef.current
+        .then(() => saveSnapshotRef.current())
+        .catch(() => {
+          saveErrorRef.current = true;
+          setShareStatus("Could not save online. Your local copy is still saved.");
+        });
+      await saveQueueRef.current;
+      if (saveErrorRef.current) return;
+      const url = `${window.location.origin}/p/${ownerProject.id}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareStatus("Share link copied.");
+      } catch {
+        setShareStatus(url);
+      }
+      return;
+    }
+
+    let created: { project: { id: string; revision: number }; capability: string } | undefined;
+    setShareStatus(openedProjectId ? "Creating your editable fork…" : "Creating share link…");
+    try {
+      const initialSources: StoredSource[] = studioState.sources.map(({ assetId: _assetId, ...source }) => source);
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ manifest: createManifest(initialSources, { ...studioState, sources: initialSources }) }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Could not create the shared project.");
+      }
+      created = await response.json() as { project: { id: string; revision: number }; capability: string };
+
+      let finalSources: StoredSource[] = initialSources;
+      if (includeSourceAudio) {
+        finalSources = [];
+        for (const source of studioState.sources) {
+          const loadedSource = sources.find((item) => item.id === source.id);
+          if (source.sourceUrl) {
+            finalSources.push(source);
+            continue;
+          }
+          let file = await readStoredAudioFile(source.id);
+          if (!file && source.assetId && openedProjectId) {
+            const metadata = await fetch(`/api/projects/${openedProjectId}/assets/${source.assetId}`, { cache: "no-store" });
+            if (metadata.ok) {
+              const sharedAsset = await metadata.json() as { url: string; contentType: string; fileName: string };
+              const audioResponse = await fetch(sharedAsset.url);
+              if (audioResponse.ok) file = new File([await audioResponse.blob()], sharedAsset.fileName, { type: sharedAsset.contentType });
+            }
+          }
+          if (!file) {
+            if (loadedSource?.audio || source.assetId) throw new Error(`Could not retrieve audio for ${source.name || "a source"}.`);
+            finalSources.push(source);
+            continue;
+          }
+          const fileName = file.name || source.name || "audio";
+          const reportedType = file.type.toLowerCase().split(";", 1)[0];
+          const contentType = ["audio/mpeg", "audio/wav", "audio/x-wav", "audio/wave"].includes(reportedType)
+            ? reportedType
+            : /\.mp3$/i.test(fileName) ? "audio/mpeg" : /\.wav$/i.test(fileName) ? "audio/wav" : "";
+          if (!contentType) throw new Error(`${fileName} is not a supported WAV or MP3 file.`);
+          const uploadResponse = await fetch(`/api/projects/${created.project.id}/assets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${created.capability}` },
+            body: JSON.stringify({ fileName, contentType, size: file.size }),
+          });
+          if (!uploadResponse.ok) {
+            const payload = await uploadResponse.json().catch(() => null) as { error?: string } | null;
+            throw new Error(payload?.error ?? `Could not prepare audio upload for ${fileName}.`);
+          }
+          const upload = await uploadResponse.json() as { assetId: string; uploadUrl: string; fields: Record<string, string> };
+          const form = new FormData();
+          for (const [name, value] of Object.entries(upload.fields)) form.append(name, value);
+          form.append("file", file);
+          const uploadResponseFromBucket = await fetch(upload.uploadUrl, { method: "POST", body: form });
+          if (!uploadResponseFromBucket.ok) throw new Error(`Could not upload ${fileName} (${uploadResponseFromBucket.status}).`);
+          const completeResponse = await fetch(`/api/projects/${created.project.id}/assets/${upload.assetId}/complete`, {
+            method: "POST", headers: { Authorization: `Bearer ${created.capability}` },
+          });
+          if (!completeResponse.ok) {
+            const payload = await completeResponse.json().catch(() => null) as { error?: string } | null;
+            throw new Error(payload?.error ?? `Could not verify uploaded audio ${fileName}.`);
+          }
+          finalSources.push({ ...source, assetId: upload.assetId });
+        }
+      }
+
+      const finalState = { ...studioState, sources: finalSources };
+      const saveResponse = await fetch(`/api/projects/${created.project.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${created.capability}`,
+          "If-Match": `"${created.project.revision}"`,
+        },
+        body: JSON.stringify({ manifest: createManifest(finalSources, finalState) }),
+      });
+      if (!saveResponse.ok) {
+        const payload = await saveResponse.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Could not save the shared project.");
+      }
+      const saved = await saveResponse.json() as { revision: number };
+      for (const source of studioState.sources) {
+        const localFile = await readStoredAudioFile(source.id, openedProjectId);
+        if (localFile) await storeAudioFile(source.id, localFile, created.project.id);
+      }
+      window.localStorage.setItem(`souunnds.project-owner.${created.project.id}`, JSON.stringify({ capability: created.capability }));
+      window.localStorage.setItem(`souunnds.project-state.${created.project.id}`, JSON.stringify(finalState));
+      window.localStorage.setItem(`souunnds.project-revision.${created.project.id}`, String(saved.revision));
+      window.localStorage.setItem(`souunnds.project-dirty.${created.project.id}`, "false");
+      window.sessionStorage.setItem("souunnds.open-project", JSON.stringify({ id: created.project.id, revision: saved.revision }));
+      setOpenedProjectId(created.project.id);
+      projectRevisionRef.current = saved.revision;
+      setSources((current) => current.map((source) => {
+        const persisted = finalSources.find((candidate) => candidate.id === source.id);
+        return { ...source, sourceUrl: persisted?.sourceUrl, assetId: persisted?.assetId };
+      }));
+      setOwnerProject({ id: created.project.id, capability: created.capability, revision: saved.revision });
+      const url = `${window.location.origin}/p/${created.project.id}`;
+      window.history.replaceState(null, "", `/p/${created.project.id}`);
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareStatus(includeSourceAudio ? "Share link copied. Included available local audio." : "Share link copied. Local audio was not included; recipients can relink it.");
+      } catch {
+        setShareStatus(`Share link: ${url}${includeSourceAudio ? "" : " · Local audio was not included."}`);
+      }
+    } catch (error) {
+      if (created) {
+        await fetch(`/api/projects/${created.project.id}`, {
+          method: "DELETE", headers: { Authorization: `Bearer ${created.capability}` },
+        }).catch(() => undefined);
+      }
+      setShareStatus(error instanceof Error ? error.message : "Could not create the shared project.");
+    }
+  }
+
+  async function replaceRemoteProjectWithDraft(): Promise<void> {
+    if (!ownerProject) return;
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    await saveQueueRef.current;
+    try {
+      const response = await fetch(`/api/projects/${ownerProject.id}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Could not read the latest online project.");
+      const latest = await response.json() as { revision: number };
+      if (!Number.isSafeInteger(latest.revision) || latest.revision < 1) throw new Error("The online project revision is invalid.");
+      projectRevisionRef.current = latest.revision;
+      window.sessionStorage.setItem("souunnds.open-project", JSON.stringify({ id: ownerProject.id, revision: latest.revision }));
+      window.localStorage.setItem(`souunnds.project-revision.${ownerProject.id}`, String(latest.revision));
+      window.localStorage.setItem(`souunnds.project-dirty.${ownerProject.id}`, "true");
+      setRemoteConflictRevision(null);
+      saveErrorRef.current = false;
+      await saveSnapshotRef.current();
+    } catch (error) {
+      setShareStatus(error instanceof Error ? error.message : "Could not save the local draft.");
+    }
+  }
+
+  async function discardLocalDraftForLatest(): Promise<void> {
+    if (!ownerProject) return;
+    try {
+      const response = await fetch(`/api/projects/${ownerProject.id}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Could not read the latest online project.");
+      const latest = await response.json() as { revision: number; manifest: { state: unknown } };
+      if (!Number.isSafeInteger(latest.revision) || latest.revision < 1
+        || !latest.manifest?.state || typeof latest.manifest.state !== "object") {
+        throw new Error("The online project is invalid.");
+      }
+      window.localStorage.setItem(`souunnds.project-state.${ownerProject.id}`, JSON.stringify(latest.manifest.state));
+      window.localStorage.setItem(`souunnds.project-revision.${ownerProject.id}`, String(latest.revision));
+      window.localStorage.setItem(`souunnds.project-dirty.${ownerProject.id}`, "false");
+      window.sessionStorage.setItem("souunnds.open-project", JSON.stringify({ id: ownerProject.id, revision: latest.revision }));
+      window.location.reload();
+    } catch (error) {
+      setShareStatus(error instanceof Error ? error.message : "Could not load the latest online project.");
+    }
+  }
+
+
+  function blockReadOnlyMutation(event: ReactSyntheticEvent): void {
+    if (!readOnlySharedProject) return;
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest("[data-readonly-action]")) return;
+    const control = target.closest("button,input,select,textarea,[role='button'],[role='combobox'],[role='option'],[role='slider'],[contenteditable='true']");
+    if (!control) return;
+    if (event.type === "focus") {
+      (control as HTMLElement).blur?.();
+    } else {
+      event.preventDefault();
+    }
+    event.stopPropagation();
+  }
   return (
     <main className="app-shell">
+      <header className="project-toolbar">
+        <strong>{readOnlySharedProject ? "Read-only shared project" : ownerProject ? "Your shared project" : "Local project"}</strong>
+        {!ownerProject && (
+          <label className="share-audio-option">
+            <input type="checkbox" checked={includeSourceAudio} onChange={(event) => setIncludeSourceAudio(event.target.checked)} />
+            <span>Include local audio</span>
+          </label>
+        )}
+        <button className="make-button label-caps" type="button" onClick={() => void shareOrFork()}>
+          {readOnlySharedProject ? "Fork to edit" : ownerProject ? "Copy share link" : "Share"}
+        </button>
+        <span className="project-share-status" role="status" aria-live="polite">{shareStatus}</span>
+      </header>
+      {ownerProject && remoteConflictRevision !== null && (
+        <div className="project-conflict" role="alert">
+          <span>Your local draft is preserved, but the online project has newer changes. Choose which version to keep.</span>
+          <button className="make-button label-caps" type="button" onClick={() => void replaceRemoteProjectWithDraft()}>Replace online with my draft</button>
+          <button className="make-button label-caps" type="button" onClick={() => void discardLocalDraftForLatest()}>Discard draft and load online</button>
+        </div>
+      )}
+      <div
+        className="project-editor-content"
+        inert={remoteConflictRevision !== null || undefined}
+        data-read-only={readOnlySharedProject || undefined}
+        onClickCapture={blockReadOnlyMutation}
+        onPointerDownCapture={blockReadOnlyMutation}
+        onChangeCapture={blockReadOnlyMutation}
+        onKeyDownCapture={blockReadOnlyMutation}
+        onFocusCapture={blockReadOnlyMutation}
+      >
       <section className="workspace-section sources-section">
         <SectionHeader
           controlsId="sources-content"
@@ -2792,7 +3248,7 @@ export function App() {
         {expandedSections.sources && (
           <div id="sources-content" className="section-content source-list">
             {sources.map((item, index) => (
-              <div className="source-row" key={item.id}>
+              <div className={`source-row${index === sources.length - 1 ? " source-row-last" : ""}`} key={item.id}>
                 <span className="source-number mono">{`source ${index + 1}`}</span>
                 {item.name || item.audio ? (
                   <input
@@ -2806,6 +3262,7 @@ export function App() {
                     ))}
                   />
                 ) : <span className="source-empty-name" aria-hidden="true" />}
+                {!item.audio && <span className="source-relink-status">Audio unavailable · choose audio to relink</span>}
                 <div className="source-row-actions">
                   <button className="source-picker-button label-caps" type="button" onPointerDownCapture={(event) => {
                     audioPickerPointerOpenedRef.current = audioPopoverRef.current?.matches(":popover-open") === true && audioPickerButtonRef.current === event.currentTarget;
@@ -2816,7 +3273,7 @@ export function App() {
                   {cachedSourceIds.has(item.id) && <IconButton onClick={(event) => void restoreCachedAudio(item.id, event.currentTarget)} ariaLabel={`Restore cached audio for source ${index + 1}`}><RestoreIcon /></IconButton>}
                   <span className="source-duration mono" aria-label={`Source ${index + 1} length ${formatSeconds(item.duration)}`}>{formatSeconds(item.duration)}</span>
                   <PlayButton onClick={() => void togglePlayback(item.id)} disabled={!item.audio} ariaLabel={`Play source ${index + 1}`} {...targetPlaybackState({ kind: "source", id: item.id })} />
-                  <IconButton className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused && !tailPlaying)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
+                  <IconButton allowReadOnly className="transport-stop-button" onClick={stopPlayback} disabled={!playbackTargetMatches(playbackTarget, { kind: "source", id: item.id }) || (!playing && !paused && !tailPlaying)} ariaLabel={`Stop source ${index + 1}`}><StopIcon /></IconButton>
                   <IconButton className="destructive-button" onClick={() => removeSource(item.id)} ariaLabel={`Remove source ${index + 1}`}><CloseIcon /></IconButton>
                 </div>
               </div>
@@ -3057,7 +3514,7 @@ export function App() {
                                 onClick={(event) => selectSequenceClip(event, sequence.id, index, step.id)}
                                 aria-label={`${sequence.name} clip ${index + 1}, ${label}, ${step.startSeconds.toFixed(2)} to ${(step.startSeconds + step.durationSeconds).toFixed(2)} seconds${step.repeatFill ? ", repeat fill" : ""}${step.muted ? ", muted" : ""}`}
                                 title={`Edit ${sequence.name} clip ${index + 1} (${label}). Shift-click to toggle selection.`}
-                                aria-pressed={selectedClipIds.has(sequenceClipKey(sequence.id, step.id))}
+                                data-readonly-action="true"
                               >
                                 <span className="sequence-cell-content" aria-hidden="true" />
                               </button>
@@ -3242,6 +3699,7 @@ export function App() {
         )}
       </section>
 
+      </div>
       <div className="processing-footer">
         <div className="footer-status" role="status" aria-live="polite">
           <span className="processing-footer-label">{processing ? "PROCESSING" : playing ? "PLAYING" : paused ? "PAUSED" : tailPlaying ? "TAIL" : "STOPPED"}</span>
@@ -3250,7 +3708,7 @@ export function App() {
           <span className="footer-divider" aria-hidden="true" />
           <span className="processing-footer-percent">{processingProgress ?? (playing || tailPlaying ? 100 : 42)}%</span>
         </div>
-        <IconButton className="transport-stop-button footer-stop-button" onClick={stopPlayback} disabled={!playing && !paused && !tailPlaying && !keyboardPlaying && !processing} ariaLabel="Stop playback"><StopIcon /></IconButton>
+        <IconButton allowReadOnly className="transport-stop-button footer-stop-button" onClick={stopPlayback} disabled={!playing && !paused && !tailPlaying && !keyboardPlaying && !processing} ariaLabel="Stop playback"><StopIcon /></IconButton>
       </div>
       <div className="sr-only" aria-live="polite">{status}</div>
     </main>
