@@ -3,11 +3,13 @@ import {
   DEFAULT_PLAYBACK_ADSR,
   applyPlaybackAdsr,
   DEFAULT_PARAMS,
+  MAX_PITCH_SEMITONES,
   generateArrangement,
   renderArrangementAsync,
   renderSequencerAsync,
   fitPcmDuration,
   findAudibleStart,
+  pitchShiftPcm,
   sourceSegmentRms,
   type Arrangement,
   type Layer,
@@ -201,6 +203,7 @@ function isPersistedLayer(value: unknown): value is PersistedLayer {
     && typeof layer.muted === "boolean"
     && (layer.color === undefined || typeof layer.color === "string")
     && (layer.sourceId === undefined || typeof layer.sourceId === "string")
+    && (layer.pitchSemitones === undefined || isFiniteNumber(layer.pitchSemitones))
     && (layer.triggerMode === undefined || layer.triggerMode === "gate" || layer.triggerMode === "one-shot");
 }
 
@@ -240,6 +243,9 @@ function normalizePersistedSequencer(value: unknown, sequenceIndex: number): Seq
       durationSeconds,
       repeatFill: typeof step.repeatFill === "boolean" ? step.repeatFill : true,
       muted: step.muted === true,
+      pitchSemitones: isFiniteNumber(step.pitchSemitones)
+        ? clampNumber(step.pitchSemitones, -MAX_PITCH_SEMITONES, MAX_PITCH_SEMITONES)
+        : 0,
     });
     if (!hasTimelineTiming) legacyCursor += durationSeconds + (stepIndex < sequencer.steps.length - 1 ? gapLength : 0);
   }
@@ -317,6 +323,9 @@ function readPersistedStudioState(): PersistedStudioState | null {
           layerColors.push(color);
           return {
             ...layer,
+            pitchSemitones: isFiniteNumber(layer.pitchSemitones)
+              ? clampNumber(layer.pitchSemitones, -MAX_PITCH_SEMITONES, MAX_PITCH_SEMITONES)
+              : 0,
             name: `Layer ${index + 1}`,
             color,
             triggerMode: layer.triggerMode === "gate" ? "gate" as const : "one-shot" as const,
@@ -493,6 +502,7 @@ function createLayer(duration: number, index: number, existingColors: Iterable<s
     sourceId,
     segment: { start: 0, end: Math.max(0.1, Math.min(duration, 4)) },
     params: { ...DEFAULT_PARAMS },
+    pitchSemitones: 0,
     offsetSeconds: 0,
     gain: 0.8,
     muted: false,
@@ -521,6 +531,7 @@ function createSequenceStep(
     durationSeconds: roundTimelineSeconds(Math.max(MIN_CLIP_DURATION_SECONDS, durationSeconds)),
     repeatFill,
     muted: false,
+    pitchSemitones: 0,
   };
 }
 
@@ -1805,7 +1816,8 @@ export function App() {
     try {
       const playbackArrangement = arrangementForPlayback();
       const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
-      const rendered = await renderLayerCached(sourceForLayer(playableLayer)!, playableLayer.segment, playableLayer.params);
+      const stretched = await renderLayerCached(sourceForLayer(playableLayer)!, playableLayer.segment, playableLayer.params);
+      const rendered = pitchShiftPcm(stretched, playableLayer.pitchSemitones ?? 0);
       if (pendingKeyboardTriggersRef.current.get(layer.id) !== token) return;
       if (mode === "gate" && activeTriggerCodesRef.current.get(code)?.layerId !== layer.id) return;
       const keyboardBus = ensureKeyboardBus();
@@ -2372,7 +2384,8 @@ export function App() {
     try {
       const playbackArrangement = arrangementForPlayback();
       const playableLayer = playbackArrangement.layers.find((candidate) => candidate.id === layer.id) ?? layer;
-      const rendered = await renderLayerCached(sourceForLayer(playableLayer)!, playableLayer.segment, playableLayer.params);
+      const stretched = await renderLayerCached(sourceForLayer(playableLayer)!, playableLayer.segment, playableLayer.params);
+      const rendered = pitchShiftPcm(stretched, playableLayer.pitchSemitones ?? 0);
       if (!isCurrentPlaybackRequest(requestId)) return;
       updateProcessingProgress(requestId, 100);
       await playPcm(rendered, playableLayer.name, { kind: "layer", id: playableLayer.id }, undefined, false, adsr, false, requestId);
@@ -3372,6 +3385,7 @@ export function App() {
                       <RangeField label="Stretch" output={`${layer.params.stretch.toFixed(2)}×`} ariaLabel={`${layer.name} stretch`} min={1} max={40} step={0.5} value={layer.params.stretch} onChange={(value) => updateLayerParams(layer.id, { stretch: value })} />
                       <RangeField label="Offset" output={`${Math.round(layer.offsetSeconds * 1000)}ms`} ariaLabel={`${layer.name} offset`} min={0} max={16} step={0.001} value={layer.offsetSeconds} onChange={(value) => updateLayer(layer.id, { offsetSeconds: value })} />
                       <RangeField label="Gain" output={`${(20 * Math.log10(Math.max(0.0001, layer.gain))).toFixed(2)}dB`} ariaLabel={`${layer.name} gain`} min={0} max={2} step={0.05} value={layer.gain} onChange={(value) => updateLayer(layer.id, { gain: value })} />
+                      <RangeField label="Pitch" output={`${(layer.pitchSemitones ?? 0) > 0 ? "+" : ""}${layer.pitchSemitones ?? 0} st`} ariaLabel={`${layer.name} pitch shift`} min={-MAX_PITCH_SEMITONES} max={MAX_PITCH_SEMITONES} step={1} value={layer.pitchSemitones ?? 0} onChange={(value) => updateLayer(layer.id, { pitchSemitones: value })} />
                     </div>
                     <div className="layer-row-actions">
                       <div className="layer-trigger-controls">
@@ -3577,6 +3591,16 @@ export function App() {
                                         <span className="duration-unit" aria-hidden="true">s</span>
                                       </div>
                                     </label>
+                                    <RangeField
+                                      label="Pitch"
+                                      output={`${(step.pitchSemitones ?? 0) > 0 ? "+" : ""}${step.pitchSemitones ?? 0} st`}
+                                      ariaLabel={`${sequence.name} clip ${index + 1} pitch shift`}
+                                      min={-MAX_PITCH_SEMITONES}
+                                      max={MAX_PITCH_SEMITONES}
+                                      step={1}
+                                      value={step.pitchSemitones ?? 0}
+                                      onChange={(value) => updateStep(index, { pitchSemitones: value }, sequence.id)}
+                                    />
                                     <label className="checkbox-field">
                                       <input type="checkbox" checked={step.repeatFill} onChange={(event) => updateStep(index, { repeatFill: event.target.checked }, sequence.id)} />
                                       Repeat fill

@@ -13,6 +13,7 @@ import {
   renderSequencerAsync,
   scheduleSequencer,
   sourceSegmentRms,
+  pitchShiftPcm,
   stretchPcm,
   type Arrangement,
   type PcmAudio,
@@ -29,6 +30,22 @@ function toneAudio(): PcmAudio {
   const samples = new Float32Array(16);
   for (let index = 0; index < samples.length; index += 1) samples[index] = index / samples.length;
   return { sampleRate: 8, channels: 1, samples };
+}
+
+function sineAudio(frequency: number, seconds = 0.2, sampleRate = 48000): PcmAudio {
+  const samples = new Float32Array(Math.round(seconds * sampleRate));
+  for (let frame = 0; frame < samples.length; frame += 1) {
+    samples[frame] = Math.sin((2 * Math.PI * frequency * frame) / sampleRate);
+  }
+  return { sampleRate, channels: 1, samples };
+}
+
+function positiveZeroCrossings(audio: PcmAudio): number {
+  let crossings = 0;
+  for (let frame = 1; frame < audio.samples.length; frame += 1) {
+    if (audio.samples[frame - 1] <= 0 && audio.samples[frame] > 0) crossings += 1;
+  }
+  return crossings;
 }
 
 function sequenceClip(
@@ -249,8 +266,8 @@ describe("audio core", () => {
       ],
     };
     expect(scheduleSequencer(arrangement, "main")).toEqual([
-      { layerId: "layer", startSeconds: 0.63, durationSeconds: 1.17, loop: true },
-      { layerId: "layer", startSeconds: 3.14, durationSeconds: 1.37, loop: false },
+      { layerId: "layer", startSeconds: 0.63, durationSeconds: 1.17, loop: true, pitchSemitones: 0 },
+      { layerId: "layer", startSeconds: 3.14, durationSeconds: 1.37, loop: false, pitchSemitones: 0 },
     ]);
   });
 
@@ -274,27 +291,29 @@ describe("audio core", () => {
       ],
     };
     expect(scheduleSequencer(arrangement, "main")).toEqual([
-      { layerId: "layer", startSeconds: 0, durationSeconds: 1, loop: true },
+      { layerId: "layer", startSeconds: 0, durationSeconds: 1, loop: true, pitchSemitones: 0 },
     ]);
     const rendered = await renderSequencerAsync(audio, arrangement, "main", async (input) => input);
     expect(rendered.samples.slice(0, 4).every((sample) => sample > 0.9)).toBe(true);
     expect(rendered.samples.slice(4).every((sample) => sample === 0)).toBe(true);
   });
 
-  it("bounds nested sequence playback to its parent clip", () => {
+  it("accumulates nested clip pitch offsets before applying the effective limit", () => {
     const arrangement: Arrangement = {
       layers: [
         { id: "layer", name: "Layer", color: "#b9dfe3", segment: { start: 0, end: 1 }, params: { ...DEFAULT_PARAMS }, offsetSeconds: 0, gain: 1, muted: false, triggerMode: "one-shot" },
       ],
       sequencers: [
-        { id: "child", name: "Child", muted: false, durationSeconds: 1, steps: [sequenceClip("child-clip", 0, 1)] },
-        { id: "main", name: "Main", muted: false, durationSeconds: 4, steps: [sequenceClip("nested", 1, 2.5, "child", true, "sequencer")] },
+        { id: "deepest", name: "Deepest", muted: false, durationSeconds: 1, steps: [{ ...sequenceClip("leaf", 0, 1), pitchSemitones: -12 }] },
+        { id: "grand", name: "Grand", muted: false, durationSeconds: 1, steps: [{ ...sequenceClip("grand-clip", 0, 1, "deepest", true, "sequencer"), pitchSemitones: 12 }] },
+        { id: "child", name: "Child", muted: false, durationSeconds: 1, steps: [{ ...sequenceClip("child-clip", 0, 1, "grand", true, "sequencer"), pitchSemitones: 12 }] },
+        { id: "main", name: "Main", muted: false, durationSeconds: 4, steps: [{ ...sequenceClip("nested", 1, 2.5, "child", true, "sequencer"), pitchSemitones: 12 }] },
       ],
     };
     expect(scheduleSequencer(arrangement, "main")).toEqual([
-      { layerId: "layer", startSeconds: 1, durationSeconds: 1, loop: true },
-      { layerId: "layer", startSeconds: 2, durationSeconds: 1, loop: true },
-      { layerId: "layer", startSeconds: 3, durationSeconds: 0.5, loop: true },
+      { layerId: "layer", startSeconds: 1, durationSeconds: 1, loop: true, pitchSemitones: 24 },
+      { layerId: "layer", startSeconds: 2, durationSeconds: 1, loop: true, pitchSemitones: 24 },
+      { layerId: "layer", startSeconds: 3, durationSeconds: 0.5, loop: true, pitchSemitones: 24 },
     ]);
   });
 
@@ -356,5 +375,71 @@ describe("audio core", () => {
     await renderSequencerAsync(toneAudio(), arrangement, "first", stretch, undefined, renderedLayers);
     await renderSequencerAsync(toneAudio(), arrangement, "second", stretch, undefined, renderedLayers);
     expect(renderCount).toBe(1);
+  });
+
+  it("applies layer pitch in sync and async arrangements without changing duration", async () => {
+    const audio = sineAudio(440);
+    const arrangement: Arrangement = {
+      layers: [{
+        id: "layer",
+        name: "Layer",
+        color: "#b9dfe3",
+        segment: { start: 0, end: 0.2 },
+        params: { ...DEFAULT_PARAMS, stretch: 1 },
+        pitchSemitones: 12,
+        offsetSeconds: 0,
+        gain: 1,
+        muted: false,
+        triggerMode: "one-shot",
+      }],
+      sequencers: [],
+    };
+    const sync = renderArrangement(audio, arrangement, (input) => input);
+    const asyncRendered = await renderArrangementAsync(audio, arrangement, async (input) => input);
+    for (const output of [sync, asyncRendered]) {
+      expect(output.sampleRate).toBe(audio.sampleRate);
+      expect(output.samples.length).toBe(audio.samples.length);
+      expect(positiveZeroCrossings(output)).toBeGreaterThan(positiveZeroCrossings(audio) * 1.9);
+      expect(positiveZeroCrossings(output)).toBeLessThan(positiveZeroCrossings(audio) * 2.1);
+    }
+    const down = renderArrangement(audio, {
+      ...arrangement,
+      layers: arrangement.layers.map((layer) => ({ ...layer, pitchSemitones: -12 })),
+    }, (input) => input);
+    expect(down.samples.length).toBe(audio.samples.length);
+    expect(positiveZeroCrossings(down)).toBeGreaterThan(positiveZeroCrossings(audio) * 0.45);
+    expect(positiveZeroCrossings(down)).toBeLessThan(positiveZeroCrossings(audio) * 0.55);
+  });
+
+  it("adds a sequence clip pitch offset to its layer setting", async () => {
+    const audio = sineAudio(440);
+    const arrangement: Arrangement = {
+      layers: [{
+        id: "layer",
+        name: "Layer",
+        color: "#b9dfe3",
+        segment: { start: 0, end: 0.2 },
+        params: { ...DEFAULT_PARAMS, stretch: 1 },
+        pitchSemitones: 7,
+        offsetSeconds: 0,
+        gain: 1,
+        muted: false,
+        triggerMode: "one-shot",
+      }],
+      sequencers: [{
+        id: "main",
+        name: "Main",
+        muted: false,
+        durationSeconds: 0.2,
+        steps: [{ ...sequenceClip("clip", 0, 0.2, "layer", false), pitchSemitones: 5 }],
+      }],
+    };
+    const sync = renderSequencer(audio, arrangement, "main", (input) => input);
+    const asyncRendered = await renderSequencerAsync(audio, arrangement, "main", async (input) => input);
+    for (const output of [sync, asyncRendered]) {
+      expect(output.samples.length).toBe(audio.samples.length);
+      expect(positiveZeroCrossings(output)).toBeGreaterThan(positiveZeroCrossings(audio) * 1.9);
+      expect(positiveZeroCrossings(output)).toBeLessThan(positiveZeroCrossings(audio) * 2.1);
+    }
   });
 });

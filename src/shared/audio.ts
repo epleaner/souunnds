@@ -79,6 +79,8 @@ export interface Layer {
   color: string;
   segment: Segment;
   params: StretchParams;
+  /** Base pitch offset, in semitones, applied to every render of this layer. */
+  pitchSemitones?: number;
   offsetSeconds: number;
   gain: number;
   muted: boolean;
@@ -93,6 +95,8 @@ export interface SequenceStep {
   durationSeconds: number;
   repeatFill: boolean;
   muted: boolean;
+  /** Additional pitch offset for this clip, added to its layer's setting. */
+  pitchSemitones?: number;
 }
 
 export interface Sequencer {
@@ -115,7 +119,11 @@ export interface ScheduledLayer {
   startSeconds: number;
   durationSeconds: number;
   loop: boolean;
+  /** Accumulated clip pitch offset, excluding the layer's own pitch setting. */
+  pitchSemitones: number;
 }
+
+export const MAX_PITCH_SEMITONES = 12;
 
 export const DEFAULT_PARAMS: StretchParams = {
   stretch: 8,
@@ -316,6 +324,45 @@ export function stretchPcm(audio: PcmAudio, segment: Segment, params: StretchPar
   return { sampleRate: audio.sampleRate, channels: audio.channels, samples: output };
 }
 
+/**
+ * Shift pitch while retaining duration: resample to change pitch, then use the
+ * existing granular stretcher to return to the original frame count.
+ */
+export function pitchShiftPcm(audio: PcmAudio, semitones: number): PcmAudio {
+  const originalFrames = frameCount(audio);
+  const boundedSemitones = Number.isFinite(semitones)
+    ? clamp(semitones, -2 * MAX_PITCH_SEMITONES, 2 * MAX_PITCH_SEMITONES)
+    : 0;
+  if (!originalFrames || boundedSemitones === 0) return audio;
+
+  const pitchRatio = 2 ** (boundedSemitones / 12);
+  const resampledFrames = Math.max(1, Math.round(originalFrames / pitchRatio));
+  const samples = new Float32Array(resampledFrames * audio.channels);
+  for (let frame = 0; frame < resampledFrames; frame += 1) {
+    const sourcePosition = frame * pitchRatio;
+    const sourceLeft = Math.min(originalFrames - 1, Math.floor(sourcePosition));
+    const sourceRight = Math.min(originalFrames - 1, sourceLeft + 1);
+    const fraction = sourcePosition - sourceLeft;
+    for (let channel = 0; channel < audio.channels; channel += 1) {
+      const left = audio.samples[sourceLeft * audio.channels + channel];
+      const right = audio.samples[sourceRight * audio.channels + channel];
+      samples[frame * audio.channels + channel] = left + (right - left) * fraction;
+    }
+  }
+
+  const stretched = stretchPcm(
+    { ...audio, samples },
+    { start: 0, end: resampledFrames / audio.sampleRate },
+    {
+      ...DEFAULT_PARAMS,
+      stretch: originalFrames / resampledFrames,
+      windowSeconds: Math.min(DEFAULT_PARAMS.windowSeconds, resampledFrames / audio.sampleRate),
+      seed: 11,
+    },
+  );
+  return fitPcmDuration(stretched, originalFrames / audio.sampleRate);
+}
+
 function sourceForLayer(
   audio: PcmAudio,
   layer: Layer,
@@ -378,7 +425,8 @@ export function renderArrangement(
   const rendered: Array<{ layer: Layer; audio: PcmAudio }> = [];
   for (const layer of arrangement.layers) {
     if (layer.muted) continue;
-    rendered.push({ layer, audio: stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params) });
+    const stretched = stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params);
+    rendered.push({ layer, audio: pitchShiftPcm(stretched, layer.pitchSemitones ?? 0) });
   }
   return mixArrangementLayers(audio, rendered);
 }
@@ -392,7 +440,8 @@ export async function renderArrangementAsync(
   const rendered: { layer: Layer; audio: PcmAudio }[] = [];
   for (const layer of arrangement.layers) {
     if (layer.muted) continue;
-    rendered.push({ layer, audio: await stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params) });
+    const stretched = await stretch(sourceForLayer(audio, layer, sources), layer.segment, layer.params);
+    rendered.push({ layer, audio: pitchShiftPcm(stretched, layer.pitchSemitones ?? 0) });
   }
   return mixArrangementLayers(audio, rendered);
 }
@@ -406,7 +455,7 @@ export function scheduleSequencer(
   const scheduled: ScheduledLayer[] = [];
   const active = new Set<string>();
 
-  const schedule = (id: string, origin: number, durationLimit?: number): number => {
+  const schedule = (id: string, origin: number, durationLimit?: number, inheritedPitch = 0): number => {
     if (active.has(id)) throw new Error(`Sequencer cycle detected at ${id}.`);
     const sequencer = sequencers.get(id);
     if (!sequencer) return 0;
@@ -421,6 +470,7 @@ export function scheduleSequencer(
       const relativeStart = Math.max(0, step.startSeconds);
       if (relativeStart >= timelineDuration) continue;
       const duration = Math.min(positive(step.durationSeconds, 0.25), timelineDuration - relativeStart);
+      const pitchSemitones = inheritedPitch + (Number.isFinite(step.pitchSemitones) ? step.pitchSemitones! : 0);
       const start = origin + relativeStart;
       if (step.targetType === "layer") {
         if (layers.has(step.targetId)) {
@@ -429,15 +479,16 @@ export function scheduleSequencer(
             startSeconds: start,
             durationSeconds: duration,
             loop: step.repeatFill,
+            pitchSemitones,
           });
         }
         continue;
       }
 
-      const childDuration = schedule(step.targetId, start, duration);
+      const childDuration = schedule(step.targetId, start, duration, pitchSemitones);
       if (step.repeatFill && childDuration > 0) {
         for (let offset = childDuration; offset < duration; offset += childDuration) {
-          schedule(step.targetId, start + offset, Math.min(childDuration, duration - offset));
+          schedule(step.targetId, start + offset, Math.min(childDuration, duration - offset), pitchSemitones);
         }
       }
     }
@@ -445,7 +496,7 @@ export function scheduleSequencer(
     return timelineDuration;
   };
 
-  schedule(sequencerId, 0);
+  schedule(sequencerId, 0, undefined, 0);
   return scheduled;
 }
 
@@ -466,10 +517,27 @@ function mixScheduledLayers(
   } : null;
   const totalFrames = Math.max(1, Math.round(positive(durationSeconds, 0.25) * audio.sampleRate));
   const output = new Float32Array(totalFrames * audio.channels);
+  const pitchedClips = new Map<string, PcmAudio>();
   for (const item of schedule) {
-    const clip = rendered.get(item.layerId);
+    const baseClip = rendered.get(item.layerId);
     const layer = layerMap.get(item.layerId);
-    if (!clip || !layer || layer.muted) continue;
+    if (!baseClip || !layer || layer.muted) continue;
+    const pitchSemitones = clamp(
+      (typeof layer.pitchSemitones === "number" && Number.isFinite(layer.pitchSemitones) ? layer.pitchSemitones : 0)
+        + item.pitchSemitones,
+      -2 * MAX_PITCH_SEMITONES,
+      2 * MAX_PITCH_SEMITONES,
+    );
+    let clip = baseClip;
+    if (pitchSemitones !== 0) {
+      const pitchKey = `${item.layerId}:${pitchSemitones}`;
+      const cachedPitch = pitchedClips.get(pitchKey);
+      if (cachedPitch) clip = cachedPitch;
+      else {
+        clip = pitchShiftPcm(baseClip, pitchSemitones);
+        pitchedClips.set(pitchKey, clip);
+      }
+    }
     const startFrame = Math.floor(item.startSeconds * audio.sampleRate);
     const clipFrames = frameCount(clip);
     if (!clipFrames) continue;
