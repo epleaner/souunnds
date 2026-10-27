@@ -1,0 +1,68 @@
+name: Cloudflare migration
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deploy only the environment selected by the operator
+        type: choice
+        required: true
+        options: [preview, production]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.0'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+      - run: npm run build:core
+      - name: Build SIMD and non-SIMD WASM with pinned Emscripten
+        run: docker run --rm --volume "$PWD:/src" --workdir /src emscripten/emsdk:6.0.13 node scripts/build-wasm.mjs
+      - run: npm run build
+      - run: npm run build --workspace @souunnds/cloudflare-production
+      - run: npm run build --workspace @souunnds/cloudflare-preview
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-dist
+          path: dist/
+          if-no-files-found: error
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.0'
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: studio-dist
+          path: dist/
+      - name: Build and deploy selected Worker
+        env:
+          TARGET: ${{ inputs.environment }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [[ -z "$CLOUDFLARE_API_TOKEN" || "$CLOUDFLARE_API_TOKEN" =~ [[:space:]] ]]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is missing or contains whitespace"
+            exit 1
+          fi
+          case "$TARGET" in preview|production) ;; *) exit 1 ;; esac
+          npm run build --workspace "@souunnds/cloudflare-$TARGET"
+          npm run deploy --workspace "@souunnds/cloudflare-$TARGET"

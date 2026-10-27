@@ -3089,12 +3089,13 @@ export function App() {
             const payload = await uploadResponse.json().catch(() => null) as { error?: string } | null;
             throw new Error(payload?.error ?? `Could not prepare audio upload for ${fileName}.`);
           }
-          const upload = await uploadResponse.json() as { assetId: string; uploadUrl: string; fields: Record<string, string> };
-          const form = new FormData();
-          for (const [name, value] of Object.entries(upload.fields)) form.append(name, value);
-          form.append("file", file);
-          const uploadResponseFromBucket = await fetch(upload.uploadUrl, { method: "POST", body: form });
-          if (!uploadResponseFromBucket.ok) throw new Error(`Could not upload ${fileName} (${uploadResponseFromBucket.status}).`);
+          const upload = await uploadResponse.json() as { assetId: string; uploadUrl: string };
+          const uploaded = await fetch(upload.uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": contentType, Authorization: `Bearer ${created.capability}` },
+            body: file,
+          });
+          if (!uploaded.ok) throw new Error(`Could not upload ${fileName} (${uploaded.status}).`);
           const completeResponse = await fetch(`/api/projects/${created.project.id}/assets/${upload.assetId}/complete`, {
             method: "POST", headers: { Authorization: `Bearer ${created.capability}` },
           });

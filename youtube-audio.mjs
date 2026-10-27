@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 
+export { videoUrl } from "./youtube-url.mjs";
 const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
 const TIMEOUT_MS = 90_000;
 const TITLE_PREFIX = "__TUNESTRETCH_TITLE__";
@@ -13,27 +14,6 @@ export class AudioRequestError extends Error {
   }
 }
 
-export function videoUrl(value) {
-  if (typeof value !== "string" || value.length > 512) return null;
-  let parsed;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) return null;
-  const host = parsed.hostname.toLowerCase();
-  let id;
-  if (["youtube.com", "www.youtube.com", "m.youtube.com"].includes(host)) {
-    if (parsed.pathname === "/watch") id = parsed.searchParams.get("v");
-    else id = /^\/(?:shorts|live)\/([A-Za-z0-9_-]{11})\/?$/.exec(parsed.pathname)?.[1];
-  } else if (["youtu.be", "www.youtu.be"].includes(host)) {
-    id = /^\/([A-Za-z0-9_-]{11})\/?$/.exec(parsed.pathname)?.[1];
-  }
-  return /^[A-Za-z0-9_-]{11}$/.test(id || "")
-    ? `https://www.youtube.com/watch?v=${id}`
-    : null;
-}
 
 // WAV streamed to stdout has unknown RIFF/data lengths. Replace them after the
 // bounded in-memory capture so browser decoders receive an ordinary WAV file.

@@ -1,32 +1,92 @@
 # souunnds
 
-Build with `npm ci && npm run build`, then run `npm start` (serves the built app on `PORT`, default 4173). For Vite development, run the Node server on port 4173 alongside `npx vite`; `/api` requests are proxied to the Node server.
+Install from the repository root with `npm ci` using Node 24.22.0 (the
+repository's `.npmrc` selects npm's linked install strategy so each Cloudflare
+workspace has a local Wrangler delegate, while `package-lock.json` remains
+the single authoritative lockfile). Build the
+native core with CMake (`npm run build:core`), SIMD and non-SIMD WASM with
+Emscripten 6.0.13 (`npm run build:wasm`), then the Vite client (`npm run build`);
+`npm run build:all` runs those steps in order. The independent Cloudflare
+workspaces in `config/production` and `config/preview` share that compiled
+client. Use `npm run build:cloudflare:production` or
+`npm run build:cloudflare:preview` for a complete local build. To deploy,
+use `npm run deploy:production` or `npm run deploy:preview` (builds source
+and then deploys that environment's prebuilt Worker), with Docker running
+for its linux/amd64 media image. The manually dispatched CI job reuses its
+verified `dist/` artifact and rebuilds only the selected Cloudflare Worker.
+Its account token and environment approvals are managed outside this repository.
+
+Production runs at `https://souunnds.elipleaner.com`; the fresh sharing preview
+is `https://souunnds-preview.elipleaner.com`. Both also retain their respective
+`epleaner-souunnds` and `epleaner-souunnds-shareable` workers.dev URLs. The media
+Containers use Durable Object scheduling, a fixed `youtube` instance name per
+Worker, explicit `standard-1` sizing, and five-minute inactivity shutdown.
+This account rejects the default Container scheduling policy. Durable Object
+scheduling does not expose a platform `maxInstances` cap; the fixed name keeps
+the public API on one Container per Worker. Client cancellation uses
+`enable_request_signal` and `request_signal_passthrough` in both configs.
+CI requires a whitespace-free account API token; a locally signed-in operator
+can deploy using `cf` OAuth.
 
 ## Shareable projects
 
-The **Share** action stores the workspace manifest in PostgreSQL configured by `DATABASE_URL`; the server creates its `share_projects` and `share_project_assets` tables on startup. Without a database, the local studio remains usable and project-sharing requests return `503`.
+Production (`epleaner-souunnds`) deliberately has no sharing bindings and returns
+`503 {\"error\":\"Project sharing is not configured\"}` for `/api/projects`.
+The separate preview (`epleaner-souunnds-shareable`) binds D1
+`epleaner-souunnds-sharing` and private R2 `epleaner-souunnds-audio`.
+Apply `migrations/0001_sharing.sql` to **preview only**; the target D1 was
+initialized with this schema and intentionally starts with no imported projects.
+Its previous PostgreSQL projects
+and edit capabilities are **not** imported, and previous share links will not
+resolve in the new database. The source bucket was empty at migration review.
+No production sharing database or bucket is implied.
 
-The share URL is read-only and publicly readable by anyone who has it. The edit capability is kept in the creator's browser storage and is never placed in the URL; losing that browser capability means the project cannot be edited or forked by its creator. Recipients can **Fork to edit**, creating a separately owned project.
+The three preview D1 tables retain the sharing contract: binary 32-byte owner
+hashes, validated JSON manifest, monotonically increasing revision, asset
+completion state, expiring upload grants and cascading project deletion.
+Creator capabilities remain in browser localStorage scoped to the origin on
+which they were created; switching origins does not transfer those credentials.
+Do not infer creator ownership from a public share URL.
 
-Local audio inclusion is optional and requires checking **Include local audio** before sharing or forking. WAV and MP3 files are uploaded by a size-constrained presigned form POST to a private Railway Bucket (maximum 25 MiB per file); uploaded content is verified before the project references it. If omitted, the project keeps its source rows and arrangement but prompts recipients to relink audio. YouTube URLs are preserved and refetched on a best-effort basis. Removed audio is deleted; abandoned, unreferenced uploads expire after 24 hours.
+Anyone with a shared project URL can read or fork it. Only the browser holding
+its bearer edit capability may update, delete, or upload to the original.
+Updates use `If-Match: \"<revision>\"`; concurrent/stale writes return 409.
+The **Include local audio** option uploads WAV/MP3 (maximum 25 MiB) via a
+same-origin bearer-authorized PUT to an R2 staging key, then verifies size,
+type and audio signature before publishing it. The project must reference
+the completed asset before the public same-origin audio GET succeeds.
+Staged grants expire in five minutes; six-hourly scheduled cleanup removes
+unreferenced assets after 24 hours and orphaned R2 keys. Forks have independent
+ownership. No bucket credentials, presigned form POST, or browser CORS rule
+are required.
 
-Audio storage requires `RAILWAY_BUCKET_ENDPOINT`, `RAILWAY_BUCKET_NAME`, `RAILWAY_BUCKET_ACCESS_KEY_ID`, and `RAILWAY_BUCKET_SECRET_ACCESS_KEY`; `RAILWAY_BUCKET_REGION` defaults to `us-east-1`, and `RAILWAY_BUCKET_PATH_STYLE` defaults to `false` for current Railway buckets. Use the actual S3 bucket name (`BUCKET` in Railway's bucket variables), not its display name. Configure bucket CORS to allow `GET` and `POST` from the app origin before browser audio uploads/downloads. For example, with `aws` CLI credentials in the environment:
-
-```sh
-aws s3api put-bucket-cors \\
-  --bucket "$RAILWAY_BUCKET_NAME" \\
-  --endpoint-url "$RAILWAY_BUCKET_ENDPOINT" \\
-  --cors-configuration '{"CORSRules":[{"AllowedHeaders":["*"],"AllowedMethods":["GET","POST"],"AllowedOrigins":["https://your-app.example"],"MaxAgeSeconds":3000}]}'
-```
-
-Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from the bucket credentials for this command. Include each deployed app origin and any local development origin that needs direct bucket access.
 ## Audio sources
 
-Each source's **Choose audio** menu accepts a local file or a YouTube video URL. YouTube imports require `yt-dlp` and `ffmpeg` installed on the **server** and available on its `PATH`. The server accepts individual videos with a direct HTTPS audio format, pipes `yt-dlp` into `ffmpeg`, and sends a bounded WAV response without writing the downloaded audio or cache to disk. Fragmented-only videos are rejected rather than downloaded to temporary files; imports may also fail if a video is unavailable or YouTube restricts server access. The browser keeps YouTube audio in memory for the current visit only; replacing a saved local source removes its old IndexedDB copy. Local file imports retain their existing browser-storage behavior.
+The studio accepts local files and YouTube video URLs. The Worker validates
+individual HTTPS YouTube URLs before forwarding only normalized video URLs to
+its private media container. The container uses yt-dlp and ffmpeg, caps active
+conversions at two, kills work at 90 seconds or on disconnect, bounds output
+at 64 MiB, and returns WAV with `X-Source-Title`. It sleeps after five minutes
+idle; filesystem contents are ephemeral and contain no project data.
+The downloader selects direct HTTPS audio from yt-dlp's `web_embedded`
+client; unavailable, embedding-restricted, or fragmented-only streams may
+fail. Imported YouTube audio remains in browser memory for the current visit.
+Locally chosen audio retains the existing browser-storage behavior.
 
-A source with a cached local audio file shows a **Restore** action in its row. It reloads that file without changing an edited source name, including after automatic restoration on page load. Uncached and YouTube sources do not show the action.
+The existing Railway production deployment has no media API route; its
+shareable-preview media route returns 503 `yt-dlp is unavailable` for the
+public test video `jNQXAC9IVRw`. Cloudflare starts its real media Container
+but the same video returns 502 `Could not download audio`; the image's stock
+yt-dlp reports no available formats after its JavaScript challenge solver
+was unavailable. No cookies, remote solver, or authorization bypass is used.
+A successful hosted WAV/title YouTube import has not been demonstrated, but
+this was already an unavailable feature in the old deployed environments.
+Do not claim a working YouTube import from the existence of the API route.
 
-The downloader uses yt-dlp's `web_embedded` client with Node as its JavaScript challenge runtime. This supports embeddable videos with direct HTTPS audio; videos that disallow embedding, expose only fragmented streams, or restrict server access remain unavailable.
+The incoming-request signal is enabled in both Workers; local subprocess
+disconnect tests pass, but hosted yt-dlp child termination and immediate slot
+release after a client disconnect have not been directly observed because the
+available public videos fail extraction before a stable long-running transfer.
 
 Successful YouTube imports name the source after the video's title; you can still rename it.
 
