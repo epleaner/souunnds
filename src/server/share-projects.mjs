@@ -1,5 +1,4 @@
-import { videoUrl } from "../../youtube-audio.mjs";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { videoUrl } from "../../youtube-url.mjs";
 
 export const MANIFEST_VERSION = 1;
 export const MAX_MANIFEST_BYTES = 1_048_576;
@@ -11,8 +10,13 @@ export class ProjectError extends Error {
   }
 }
 
-function digest(capability) {
-  return createHash("sha256").update(capability).digest();
+async function digest(capability) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(capability)));
+}
+
+function token(bytes) {
+  const random = crypto.getRandomValues(new Uint8Array(bytes));
+  return btoa(String.fromCharCode(...random)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function validCapability(capability) {
@@ -64,12 +68,12 @@ export class ProjectService {
     if (normalized.sources.some((source) => source.kind === "asset")) {
       throw new ProjectError(400, "Audio assets must be uploaded before adding them to a project");
     }
-    const id = randomBytes(18).toString("base64url");
-    const capability = randomBytes(32).toString("base64url");
+    const id = token(18);
+    const capability = token(32);
     const now = new Date().toISOString();
     const record = {
       id,
-      ownerHash: digest(capability),
+      ownerHash: await digest(capability),
       revision: 1,
       manifest: normalized,
       createdAt: now,
@@ -86,21 +90,12 @@ export class ProjectService {
   }
 
   async update(id, capability, expectedRevision, manifest) {
-    return this.store.withProjectLock(id, (store) =>
-      new ProjectService(store, { bucket: this.bucket }).updateLocked(id, capability, expectedRevision, manifest));
-  }
-
-  async updateLocked(id, capability, expectedRevision, manifest) {
     const record = await this.#authorized(id, capability);
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new ProjectError(400, "A valid project revision is required");
     if (record.revision !== expectedRevision) throw new ProjectError(409, "Project has changed; reload before saving");
     const normalized = normalizeManifest(manifest);
-    const assetChecks = await Promise.all(normalized.sources
-      .filter((source) => source.kind === "asset")
-      .map((source) => this.store.hasCompleteAsset(id, source.assetId)));
-    if (assetChecks.some((exists) => !exists)) {
-      throw new ProjectError(400, "Project manifest references an unavailable audio asset");
-    }
+    // D1 checks all referenced completed assets inside the conditional revision
+    // update; an earlier read would race deletion of an asset.
     const updated = {
       ...record,
       revision: record.revision + 1,
@@ -108,53 +103,29 @@ export class ProjectService {
       updatedAt: new Date().toISOString(),
     };
     if (!await this.store.replace(id, expectedRevision, updated)) throw new ProjectError(409, "Project has changed; reload before saving");
-    if (this.bucket) {
-      const retainedAssets = new Set(normalized.sources
-        .filter((source) => source.kind === "asset")
-        .map((source) => source.assetId));
-      const removedAssets = record.manifest.sources
-        .filter((source) => source.kind === "asset" && !retainedAssets.has(source.assetId));
-      await Promise.all(removedAssets.map(async (source) => {
-        const asset = await this.store.getAsset(id, source.assetId);
-        if (!asset) return;
-        try {
-          await this.bucket.deleteObject(`${asset.objectKey}.upload`);
-          await this.bucket.deleteObject(asset.objectKey);
-          await this.store.removeAsset(id, source.assetId);
-        } catch {
-          // Keep failed cleanup records so the owner can retry through the asset DELETE route.
-        }
-      }));
-    }
+    // Object cleanup runs on the scheduled job after the metadata commit. Never
+    // delete a live object based on a manifest snapshot outside the CAS.
     return publicProject(updated);
   }
 
   async delete(id, capability) {
-    return this.store.withProjectLock(id, (store) =>
-      new ProjectService(store, { bucket: this.bucket }).deleteLocked(id, capability));
+    const record = await this.#authorized(id, capability);
+    if (!await this.store.remove(id, record.ownerHash, record.revision)) throw new ProjectError(409, "Project has changed; reload before deleting");
   }
 
-  async deleteLocked(id, capability) {
-    await this.#authorized(id, capability);
-    const assets = await this.store.listAssets(id);
-    if (assets.length && !this.bucket) throw new ProjectError(503, "Project audio storage is not configured");
-    if (this.bucket) await Promise.all(assets.flatMap((asset) => [
-      this.bucket.deleteObject(asset.objectKey),
-      this.bucket.deleteObject(`${asset.objectKey}.upload`),
-    ]));
-    if (!await this.store.remove(id)) throw new ProjectError(404, "Project not found");
-  }
 
-  async authorizeOwner(id, capability) {
-    await this.#authorized(id, capability);
+  async ownerRecord(id, capability) {
+    return this.#authorized(id, capability);
   }
 
   async #authorized(id, capability) {
     if (!validCapability(capability)) throw new ProjectError(401, "Edit capability required");
     const record = await this.store.get(id);
     if (!record) throw new ProjectError(404, "Project not found");
-    const candidate = digest(capability);
-    if (!timingSafeEqual(record.ownerHash, candidate)) throw new ProjectError(403, "Invalid edit capability");
+    const candidate = await digest(capability);
+    let mismatch = candidate.length ^ record.ownerHash.length;
+    for (let index = 0; index < candidate.length; index++) mismatch |= candidate[index] ^ record.ownerHash[index];
+    if (mismatch) throw new ProjectError(403, "Invalid edit capability");
     return record;
   }
 }
@@ -164,30 +135,19 @@ export class MemoryProjectStore {
   #records = new Map();
   #assets = new Map();
   #uploadGrants = new Map();
-  #locks = new Map();
-
-  async withProjectLock(projectId, work) {
-    const previous = this.#locks.get(projectId);
-    let release;
-    const pending = new Promise((resolve) => { release = resolve; });
-    this.#locks.set(projectId, pending);
-    if (previous) await previous;
-    try {
-      return await work(this);
-    } finally {
-      if (this.#locks.get(projectId) === pending) this.#locks.delete(projectId);
-      release();
-    }
-  }
 
 
   async recordUploadGrant(key, expiresAt) {
     this.#uploadGrants.set(key, expiresAt);
   }
+  async uploadGrant(key) {
+    const expires_at = this.#uploadGrants.get(key);
+    return expires_at ? { expires_at } : null;
+  }
 
-  async listExpiredUploadGrants(cutoff) {
-    return [...this.#uploadGrants].filter(([, expiresAt]) => Date.parse(expiresAt) < cutoff.getTime())
-      .map(([key]) => key);
+  async listExpiredUploadGrants(cutoff, after = "") {
+    return [...this.#uploadGrants].filter(([key, expiresAt]) => key > after && Date.parse(expiresAt) < cutoff.getTime())
+      .map(([key]) => key).sort().slice(0, 100);
   }
 
   async removeUploadGrant(key) {
@@ -206,12 +166,18 @@ export class MemoryProjectStore {
   async replace(id, expectedRevision, next) {
     const current = this.#records.get(id);
     if (!current || current.revision !== expectedRevision) return false;
+    for (const source of next.manifest.sources) {
+      if (source.kind === "asset" && !this.#assets.get(`${id}:${source.assetId}`)?.completed)
+        throw new ProjectError(400, "Project manifest references an unavailable audio asset");
+    }
     this.#records.set(id, structuredClone(next));
     return true;
   }
 
   async createAsset(asset) {
     this.#assets.set(`${asset.projectId}:${asset.assetId}`, structuredClone(asset));
+    this.#uploadGrants.set(`${asset.objectKey}.upload`, new Date(Date.now() + 300_000).toISOString());
+    this.#uploadGrants.set(asset.objectKey, new Date(Date.now() + 86_400_000).toISOString());
   }
 
   async getAsset(projectId, assetId) {
@@ -223,11 +189,14 @@ export class MemoryProjectStore {
     return [...this.#assets.values()].filter((asset) => asset.projectId === projectId).map((asset) => structuredClone(asset));
   }
 
-  async listAssetsCreatedBefore(cutoff) {
-    const before = new Date(cutoff).getTime();
+  async listAssetsCreatedBefore(cutoff, after = null) {
     return [...this.#assets.values()]
-      .filter((asset) => Date.parse(asset.createdAt) < before)
-      .map((asset) => structuredClone(asset));
+      .filter((asset) => asset.createdAt < cutoff && (!after ||
+        [asset.createdAt, asset.projectId, asset.assetId].join(":") >
+        [after.createdAt, after.projectId, after.assetId].join(":")))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)
+        || a.projectId.localeCompare(b.projectId) || a.assetId.localeCompare(b.assetId))
+      .slice(0, 100).map((asset) => structuredClone(asset));
   }
 
   async hasCompleteAsset(projectId, assetId) {
@@ -236,14 +205,19 @@ export class MemoryProjectStore {
   }
 
   async completeAsset(projectId, assetId) {
-    const key = `${projectId}:${assetId}`;
-    const asset = this.#assets.get(key);
-    if (!asset) return false;
+    const asset = this.#assets.get(`${projectId}:${assetId}`);
+    if (!asset || asset.completed || !this.#records.has(projectId)) return false;
     asset.completed = true;
     return true;
   }
 
   async removeAsset(projectId, assetId) {
+    return this.#assets.delete(`${projectId}:${assetId}`);
+  }
+  async removeUnusedAsset(projectId, assetId, cutoff) {
+    const asset = this.#assets.get(`${projectId}:${assetId}`);
+    if (!asset || asset.createdAt >= cutoff || this.#records.get(projectId)?.manifest.sources
+      .some((source) => source.kind === "asset" && source.assetId === assetId)) return false;
     return this.#assets.delete(`${projectId}:${assetId}`);
   }
 

@@ -62,7 +62,7 @@ process.stdin.on('end', () => {
   ]);
   await Promise.all([chmod(join(dir, "yt-dlp"), 0o755), chmod(join(dir, "ffmpeg"), 0o755)]);
   const port = await freePort();
-  const child = spawn(process.execPath, [new URL("./server.mjs", import.meta.url).pathname], {
+  const child = spawn(process.execPath, [new URL("./media-server.mjs", import.meta.url).pathname], {
     env: { ...process.env, PORT: String(port), PATH: `${dir}:${process.env.PATH}`, CALL_MARKER: join(dir, "called"), MODE: mode },
     stdio: ["ignore", "pipe", "pipe"],
   });

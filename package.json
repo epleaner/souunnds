@@ -3,18 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "workspaces": ["config/production", "config/preview"],
   "scripts": {
-    "start": "node server.mjs",
+    "start:media": "node media-server.mjs",
     "build": "tsc --noEmit && vite build",
     "build:core": "node scripts/build-core.mjs",
     "build:wasm": "node scripts/build-wasm.mjs",
     "build:all": "npm run build:core && npm run build:wasm && npm run build",
     "check": "tsc --noEmit",
     "cli": "tsx src/cli.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:cloudflare:production": "npm run build:all && npm run build --workspace @souunnds/cloudflare-production",
+    "build:cloudflare:preview": "npm run build:all && npm run build --workspace @souunnds/cloudflare-preview",
+    "deploy:production": "npm run build:cloudflare:production && npm run deploy --workspace @souunnds/cloudflare-production",
+    "deploy:preview": "npm run build:cloudflare:preview && npm run deploy --workspace @souunnds/cloudflare-preview"
   },
   "dependencies": {
-    "pg": "^8.23.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
