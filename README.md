@@ -69,24 +69,12 @@ conversions at two, kills work at 90 seconds or on disconnect, bounds output
 at 64 MiB, and returns WAV with `X-Source-Title`. It sleeps after five minutes
 idle; filesystem contents are ephemeral and contain no project data.
 The downloader selects direct HTTPS audio from yt-dlp's `web_embedded`
-client; unavailable, embedding-restricted, or fragmented-only streams may
-fail. Imported YouTube audio remains in browser memory for the current visit.
+client. The media image installs `yt-dlp[default]`, including the matching
+`yt-dlp-ejs` player-JavaScript components, and uses the image's Node runtime
+to extract supported YouTube streams without downloading a solver at request
+time. Embedding-restricted or fragmented-only streams may still fail.
+Imported YouTube audio remains in browser memory for the current visit.
 Locally chosen audio retains the existing browser-storage behavior.
-
-The existing Railway production deployment has no media API route; its
-shareable-preview media route returns 503 `yt-dlp is unavailable` for the
-public test video `jNQXAC9IVRw`. Cloudflare starts its real media Container
-but the same video returns 502 `Could not download audio`; the image's stock
-yt-dlp reports no available formats after its JavaScript challenge solver
-was unavailable. No cookies, remote solver, or authorization bypass is used.
-A successful hosted WAV/title YouTube import has not been demonstrated, but
-this was already an unavailable feature in the old deployed environments.
-Do not claim a working YouTube import from the existence of the API route.
-
-The incoming-request signal is enabled in both Workers; local subprocess
-disconnect tests pass, but hosted yt-dlp child termination and immediate slot
-release after a client disconnect have not been directly observed because the
-available public videos fail extraction before a stable long-running transfer.
 
 Successful YouTube imports name the source after the video's title; you can still rename it.
 

@@ -40,8 +40,16 @@ else process.stdout.write('encoded-audio');
 const fs = require('node:fs');
 let input = '';
 process.stdin.on('data', chunk => input += chunk.toString());
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   if (input !== 'encoded-audio') process.exit(2);
+  if (process.env.MODE === 'oversized') {
+    const { once } = require('node:events');
+    const chunk = Buffer.alloc(65536);
+    for (let i = 0; i < 1025; i++) {
+      if (!process.stdout.write(chunk)) await once(process.stdout, 'drain');
+    }
+    return;
+  }
   const pcm = Buffer.from([0, 0, 255, 127]);
   const wav = Buffer.alloc(44 + pcm.length);
   wav.write('RIFF', 0); wav.writeUInt32LE(0xffffffff, 4);
@@ -104,6 +112,14 @@ it("pipes downloader output into converter and returns finalized decodable WAV",
   expect(wav.readUInt32LE(4)).toBe(wav.length - 8);
   expect(wav.readUInt32LE(40)).toBe(wav.length - 44);
   expect(wav.readInt16LE(46)).toBe(32767);
+});
+
+it("rejects audio exceeding the 64 MiB output bound", async () => {
+  const { port } = await startServer("oversized");
+  const response = await request(port, "https://youtu.be/abcdefghijk");
+  expect(response.status).toBe(413);
+  expect(response.headers.get("content-type")).toContain("application/json");
+  expect(await response.json()).toEqual({ error: "Audio is too large" });
 });
 
 it("rejects a completed download without a video title", async () => {
