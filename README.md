@@ -84,6 +84,10 @@ Clicking the YouTube URL field keeps the same unobtrusive border as the menu but
 
 Each layer has a **Pitch** control from −12 to +12 semitones. Each sequence clip has a matching control whose value is added to the layer's pitch setting; nested sequence clips accumulate their offsets. Pitch changes preserve clip duration, and both settings are saved with the project.
 
+## Duplicating layers and sequences
+
+Use the **Duplicate** action in a layer or sequence row's action menu to create a copy. Layer settings are copied; sequence clips keep their own identities, so edits to each copy remain separate.
+
 ## Sequence generator
 
 **Generate sequences** retains Rows and Columns (two seconds per column). **Density** fills fewer or more column slots: Sparse fills about a quarter, Balanced about five eighths, and Dense fills all; every row gets at least one clip. **Clip duration** controls each clip's span within its slot from Short (0.25–0.75 s) to Long (1.25–1.75 s).

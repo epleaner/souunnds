@@ -544,6 +544,13 @@ function createSequencer(id: string, name: string, layerId: string): Sequencer {
     steps: [createSequenceStep(layerId)],
   };
 }
+function nextSequenceName(sequencers: readonly Sequencer[]): string {
+  const nextSequenceNumber = sequencers.reduce((highest, item) => {
+    const match = /^Sequence (\d+)$/.exec(item.name);
+    return match ? Math.max(highest, Number(match[1])) : highest;
+  }, 0) + 1;
+  return `Sequence ${nextSequenceNumber}`;
+}
 
 function resizeSequencerDuration(
   sequence: Sequencer,
@@ -899,6 +906,14 @@ function CloseIcon() {
   );
 }
 
+function DuplicateIcon() {
+  return (
+    <ActionIcon>
+      <path d="M5.5 2.5h7v8h-7z" />
+      <path d="M3.5 5.5h-1v8h7v-1" />
+    </ActionIcon>
+  );
+}
 function IconButton({
   ariaLabel,
   children,
@@ -2568,14 +2583,25 @@ export function App() {
     initialArrangementCreatedRef.current = true;
     setLayers((current) => [...current, createLayer(first.duration, current.length, current.map((layer) => layer.color), first.id)]);
   }
+  function duplicateLayer(layerId: string): void {
+    const layer = layers.find((candidate) => candidate.id === layerId);
+    if (!layer) return;
+    cancelArrangementPlayback();
+    const duplicate: Layer = {
+      ...layer,
+      id: `layer-${crypto.randomUUID()}`,
+      name: `Layer ${layers.length + 1}`,
+      color: nextPastelLayerColor(layers.map((item) => item.color)),
+      segment: { ...layer.segment },
+      params: { ...layer.params },
+    };
+    setLayers((current) => [...current, duplicate]);
+    setStatus(`Duplicated ${layer.name}.`);
+  }
 
   function addSequence(): void {
     if (!source || !layers.length) return setStatus("Add a layer before adding a sequence.");
-    const nextSequenceNumber = sequencers.reduce((highest, item) => {
-      const match = /^Sequence (\d+)$/.exec(item.name);
-      return match ? Math.max(highest, Number(match[1])) : highest;
-    }, 0) + 1;
-    const sequence = createSequencer(`sequence-${Date.now()}`, `Sequence ${nextSequenceNumber}`, layers[0].id);
+    const sequence = createSequencer(`sequence-${Date.now()}`, nextSequenceName(sequencers), layers[0].id);
     cancelSequencePlayback();
     setSequencers((current) => [...current, sequence]);
     setActiveSequencerId(sequence.id);
@@ -2583,6 +2609,25 @@ export function App() {
     setSelectedClipIds(new Set([sequenceClipKey(sequence.id, sequence.steps[0].id)]));
     setSelectedCellOpen(false);
     setStatus(`Added ${sequence.name}.`);
+  }
+  function duplicateSequence(sequenceId: string): void {
+    const sequence = sequencers.find((candidate) => candidate.id === sequenceId);
+    if (!sequence) return;
+    const duplicate: Sequencer = {
+      ...sequence,
+      id: `sequence-${crypto.randomUUID()}`,
+      name: nextSequenceName(sequencers),
+      steps: sequence.steps.map((step) => ({ ...step, id: nextSequenceClipId() })),
+    };
+    cancelSequencePlayback();
+    setSequencers((current) => [...current, duplicate]);
+    setActiveSequencerId(duplicate.id);
+    setSelectedCellIndex(0);
+    setSelectedClipIds(duplicate.steps[0]
+      ? new Set([sequenceClipKey(duplicate.id, duplicate.steps[0].id)])
+      : new Set());
+    setSelectedCellOpen(false);
+    setStatus(`Duplicated ${sequence.name}.`);
   }
 
   function removeLayer(id: string): void {
@@ -3420,6 +3465,7 @@ export function App() {
                         <div className="row-icon-actions">
                           <IconButton pressed={!layer.muted} ariaLabel={`${layer.muted ? "Unmute" : "Mute"} ${layer.name}`} onClick={() => updateLayer(layer.id, { muted: !layer.muted })}><HeadphonesIcon /></IconButton>
                           <IconButton onClick={() => randomizeLayer(layer.id)} ariaLabel={`Randomize ${layer.name}`}><ShuffleIcon /></IconButton>
+                          <IconButton onClick={() => duplicateLayer(layer.id)} ariaLabel={`Duplicate ${layer.name}`}><DuplicateIcon /></IconButton>
                           <IconButton className="destructive-button" onClick={() => removeLayer(layer.id)} ariaLabel={`Remove ${layer.name}`}><CloseIcon /></IconButton>
                         </div>
                       </RowActionsMenu>
@@ -3658,6 +3704,7 @@ export function App() {
                       <PlayButton onClick={() => void toggleTargetPlayback({ kind: "sequence", id: sequence.id }, () => previewSequence(sequence.id))} disabled={!source || !sequence.steps.some((step) => !step.muted)} ariaLabel={`Play ${sequence.name}`} {...targetPlaybackState({ kind: "sequence", id: sequence.id })} />
                       <IconButton pressed={!sequence.muted} ariaLabel={`${sequence.muted ? "Unmute" : "Mute"} ${sequence.name}`} onClick={() => updateSequence({ muted: !sequence.muted }, sequence.id)}><HeadphonesIcon /></IconButton>
                       <IconButton onClick={() => randomizeSequence(sequence.id)} disabled={!source || !layers.length} ariaLabel={`Randomize ${sequence.name}`}><ShuffleIcon /></IconButton>
+                      <IconButton onClick={() => duplicateSequence(sequence.id)} ariaLabel={`Duplicate ${sequence.name}`}><DuplicateIcon /></IconButton>
                       <IconButton className="destructive-button" onClick={() => removeSequence(sequence.id)} ariaLabel={`Remove ${sequence.name}`}><CloseIcon /></IconButton>
                     </RowActionsMenu>
                   </div>

@@ -3,6 +3,7 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+.agent/
 node_modules/
 dist/
 .DS_Store
