@@ -1,5 +1,9 @@
 # souunnds
 
+## Successor project
+
+The active `souunnds` application and its Cloudflare deployment are maintained in [epleaner/souunnds](https://github.com/epleaner/souunnds). This checkout preserves the earlier implementation and has no active deployment configuration.
+
 Build with `npm ci && npm run build`, then run `npm start` (serves the built app on `PORT`, default 4173). For Vite development, run the Node server on port 4173 alongside `npx vite`; `/api` requests are proxied to the Node server.
 
 ## Audio sources
